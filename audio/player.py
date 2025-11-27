@@ -3,6 +3,8 @@ import numpy as np
 from scipy.io import wavfile
 import threading
 import os
+import unicodedata
+import re
 from PyQt5.QtCore import QObject, pyqtSignal
 
 class AudioPlayer(QObject):
@@ -19,6 +21,7 @@ class AudioPlayer(QObject):
         self.volume_levels = []  # Store current volume levels for VU meters
         self.playback_thread = None
         self.should_stop = False
+        self.lr_enabled = False
         
     def load_track(self, file_path):
         """Load an audio track from file"""
@@ -45,12 +48,16 @@ class AudioPlayer(QObject):
             else:
                 raise ValueError("Unsupported file format")
                 
+            # Detect route hint for LR based on filename and audio characteristics
+            left_hint = self._detect_left_route(file_path, samples)
+
             track = {
                 'file_path': file_path,
                 'sample_rate': sample_rate,
                 'samples': samples,
                 'volume': 0.8,  # 80% volume
-                'muted': False
+                'muted': False,
+                'left_hint': left_hint,
             }
             
             self.tracks.append(track)
@@ -68,6 +75,10 @@ class AudioPlayer(QObject):
         """Mute/unmute a specific track"""
         if 0 <= track_index < len(self.tracks):
             self.tracks[track_index]['muted'] = muted
+
+    def set_lr_mode(self, enabled: bool):
+        """Enable/disable LR routing mode."""
+        self.lr_enabled = bool(enabled)
             
     def play_all(self):
         """Play all loaded tracks simultaneously"""
@@ -174,6 +185,17 @@ class AudioPlayer(QObject):
                             
                             # Apply volume
                             track_samples = track_samples * track['volume']
+
+                            # Apply LR routing if enabled
+                            if self.lr_enabled:
+                                if track.get('left_hint'):
+                                    # Route only to left
+                                    if track_samples.shape[1] >= 2:
+                                        track_samples[:, 1] = 0.0
+                                else:
+                                    # Route only to right
+                                    if track_samples.shape[1] >= 2:
+                                        track_samples[:, 0] = 0.0
                             
                             # Prevent clipping by applying a soft limiter
                             track_samples = self._apply_soft_limiter(track_samples)
@@ -251,6 +273,89 @@ class AudioPlayer(QObject):
                 except:
                     pass
                 self.stream = None
+
+    def _normalize_text(self, s):
+        try:
+            s = s or ""
+            s = unicodedata.normalize('NFD', s)
+            s = ''.join(c for c in s if not unicodedata.combining(c))
+            return s.lower()
+        except Exception:
+            return (s or "").lower()
+
+    def _detect_left_route(self, file_path, samples):
+        """Heurística: retorna True se deve ir para o canal esquerdo (click/guia/metronomo)."""
+        try:
+            name = self._normalize_text(os.path.basename(file_path))
+            tokens = [t for t in re.split(r'[^a-z0-9]+', name) if t]
+
+            # Palavras-chave explícitas para enviar à ESQUERDA (prioridade absoluta)
+            force_left = {
+                'click', 'clicktrack', 'clk', 'tempo',
+                'metronome', 'metronomo', 'metron', 'metro',
+                'guia', 'gui', 'guide'
+            }
+            if any((kw in name) or (kw in tokens) for kw in force_left):
+                return True
+
+            # Palavras-chave de vozes/coral para enviar à DIREITA (se não contiver guia)
+            voice_right = {
+                'bgv', 'bgvs', 'bvg', 'bvgs',
+                'choir', 'coral', 'vox', 'voxes', 'vozes', 'voz',
+                'voice', 'vocals', 'backing', 'backs',
+                'soprano', 'tenor', 'alto', 'baritone', 'baritono', 'contralto',
+                'lead', 'solo'
+            }
+            if any((kw in name) or (kw in tokens) for kw in voice_right):
+                # Apenas envia para direita se não houver termos de guia explícitos
+                if not any((kw in name) or (kw in tokens) for kw in {'guia', 'guide', 'gui'}):
+                    return False
+
+            # Instrumentos típicos: manter à DIREITA
+            instrument_right = {
+                'piano', 'keys', 'keyboard', 'synth', 'pad', 'organ', 'rhodes',
+                'bass', 'baixo', 'sub',
+                'drum', 'drums', 'kick', 'snare', 'hihat', 'hi-hat', 'tom', 'perc', 'percussion',
+                'gtr', 'guitar', 'acoustic', 'electric', 'eletric', 'leadguitar', 'rhythm',
+                'flute', 'strings', 'violin', 'violino', 'cello', 'sax', 'trumpet'
+            }
+            if any((kw in name) or (kw in tokens) for kw in instrument_right):
+                return False
+        except Exception:
+            pass
+        # Fallback simples por áudio: analisa blocos RMS para silêncio vs atividade
+        try:
+            if samples is None or len(samples) == 0:
+                return False
+            mono = samples
+            if len(mono.shape) > 1:
+                mono = np.mean(np.abs(mono), axis=1)
+            else:
+                mono = np.abs(mono)
+            block = max(512, min(4096, len(mono)//100))
+            if block <= 0:
+                return False
+            trim_len = (len(mono)//block)*block
+            mono = mono[:trim_len]
+            blocks = mono.reshape(-1, block)
+            rms = np.sqrt(np.mean(blocks**2, axis=1))
+            # Normaliza RMS
+            max_r = rms.max() if rms.size > 0 else 1.0
+            if max_r <= 0:
+                return False
+            nrms = rms / max_r
+            # Fração de blocos "silenciosos"
+            silence_ratio = float(np.mean(nrms < 0.06))
+            # Se quase nunca fica em silêncio -> parece click constante
+            if silence_ratio < 0.03:
+                return True
+            # Guia intermitente (alternância marcada): mais restrito para evitar false positives
+            active_ratio = 1.0 - silence_ratio
+            if 0.25 <= active_ratio <= 0.75 and np.std(nrms) > 0.12:
+                return True
+        except Exception:
+            pass
+        return False
                 
     def _normalize_audio(self, samples):
         """Normalize audio to prevent clipping while maintaining dynamics"""

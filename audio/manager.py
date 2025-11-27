@@ -14,6 +14,7 @@ class AudioManager(QObject):
         self.players = {}  # Dictionary to store players for each song
         self.current_song = None
         self._is_playing = False
+        self.lr_enabled = False
         
     def set_current_song(self, song_data):
         """Set the current song and initialize its audio player"""
@@ -23,6 +24,10 @@ class AudioManager(QObject):
         # Create a new player for this song if it doesn't exist
         if song_id not in self.players:
             player = AudioPlayer()
+            try:
+                player.set_lr_mode(self.lr_enabled)
+            except Exception:
+                pass
             # Load all tracks for this song
             for track_path in song_data.get("tracks", []):
                 player.load_track(track_path)
@@ -31,6 +36,15 @@ class AudioManager(QObject):
             player = self.players[song_id]
             
         self.current_player = player
+
+    def set_lr_mode(self, enabled: bool):
+        """Enable/disable LR mode across all players"""
+        self.lr_enabled = bool(enabled)
+        for p in self.players.values():
+            try:
+                p.set_lr_mode(self.lr_enabled)
+            except Exception:
+                pass
         
     def play_current_song(self):
         """Play the current song"""

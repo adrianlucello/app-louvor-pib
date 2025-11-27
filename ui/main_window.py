@@ -13,6 +13,7 @@ from ui.worship_form import WorshipForm
 from ui.song_form import SongForm
 from ui.tracks_panel import TracksPanel, TrackControl
 from ui.header import HeaderWidget
+from ui.settings_dialog import SettingsDialog
 import json
 
 class MainWindow(QMainWindow):
@@ -39,6 +40,8 @@ class MainWindow(QMainWindow):
         self.worship_data = None
         self.songs = []  # List to store all songs
         self.current_song = None  # Currently selected song
+        # Settings
+        self.lr_enabled = False
         
     def create_initial_view(self):
         """Create the initial view with the pencil button"""
@@ -139,6 +142,10 @@ class MainWindow(QMainWindow):
         self.header_widget.set_worship_title(worship_title)
         self.header_widget.addSongRequested.connect(self.open_song_form)
         self.header_widget.saveRequested.connect(self.save_project)
+        try:
+            self.header_widget.settingsRequested.connect(self.open_settings)
+        except Exception:
+            pass
         self.header_widget.playRequested.connect(self.handle_play_clicked)
         self.header_widget.pauseRequested.connect(self.handle_pause_clicked)
         self.header_widget.restartRequested.connect(self.restart_current_song)
@@ -156,6 +163,10 @@ class MainWindow(QMainWindow):
         self.tracks_panel.songCardSelected.connect(self.on_song_selected)
         try:
             self.tracks_panel.audio_manager.playbackStateChanged.connect(self.on_playback_state_changed_main)
+        except Exception:
+            pass
+        try:
+            self.tracks_panel.audio_manager.set_lr_mode(self.lr_enabled)
         except Exception:
             pass
         layout.addWidget(self.tracks_panel)
@@ -702,6 +713,35 @@ class MainWindow(QMainWindow):
             msg_box.setText(f"An error occurred while adding the song: {str(e)}")
             msg_box.setIcon(QMessageBox.Critical)
             msg_box.exec_()
+
+    def open_settings(self):
+        try:
+            dlg = SettingsDialog(self)
+            try:
+                # Ajuste para novo UI: SettingRow contém .toggle
+                if hasattr(dlg, 'lr_toggle') and hasattr(dlg.lr_toggle, 'toggle'):
+                    dlg.lr_toggle.toggle.setChecked(self.lr_enabled)
+                    dlg.lr_toggle.toggle.toggled.connect(self.set_lr_mode)
+            except Exception:
+                pass
+            try:
+                dlg.center_on_parent()
+            except Exception:
+                pass
+            dlg.exec_()
+        except Exception as e:
+            print(f"Error opening settings: {e}")
+
+    def set_lr_mode(self, enabled: bool):
+        try:
+            self.lr_enabled = bool(enabled)
+            if hasattr(self, 'tracks_panel') and self.tracks_panel:
+                try:
+                    self.tracks_panel.audio_manager.set_lr_mode(self.lr_enabled)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"Error setting LR mode: {e}")
         
     def save_project(self):
         try:
@@ -762,6 +802,19 @@ class MainWindow(QMainWindow):
             self.songs = songs
             self.create_main_view()
             try:
+                # Restaura envelopes pré-computados no cache da timeline
+                for song in self.songs:
+                    try:
+                        song_id = self.tracks_panel._get_song_id(song)
+                        env = song.get("precomputed_envelope") or None
+                        if env:
+                            self.tracks_panel.timeline_cache[song_id] = {
+                                'envelope': env,
+                                'total_samples': song.get('precomputed_total_samples', 0),
+                                'sample_rate': song.get('precomputed_sample_rate', 44100),
+                            }
+                    except Exception:
+                        pass
                 for song in self.songs:
                     song_name = song.get("name", "Unknown Song")
                     key = song.get("key", "Unknown Key")

@@ -10,117 +10,167 @@ except Exception:
 class HeaderWidget(QWidget):
     addSongRequested = pyqtSignal()
     saveRequested = pyqtSignal()
+    settingsRequested = pyqtSignal()
     playRequested = pyqtSignal()
     pauseRequested = pyqtSignal()
     restartRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(70)
-        self.setStyleSheet("background-color: transparent; border-bottom: 1px solid #282828;")
+        self.setFixedHeight(80)
+        self.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #121212,
+                    stop:1 #1a1a1a
+                );
+                border-bottom: 1px solid #282828;
+            }
+        """)
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(24, 0, 24, 0)
+        layout.setContentsMargins(32, 0, 32, 0)
         layout.setSpacing(16)
 
-        # Título com fonte maior e espaçamento
+        # Título com fonte SF Pro Display
         self.title_label = QLabel("")
-        title_font = QFont("Segoe UI", 20, QFont.Bold)
+        title_font = QFont("SF Pro Display", 24, QFont.Bold)
         self.title_label.setFont(title_font)
-        self.title_label.setStyleSheet("color: #ffffff; padding: 0px;")
+        self.title_label.setStyleSheet("""
+            color: #FFFFFF; 
+            padding: 0px;
+            background: transparent;
+        """)
         layout.addWidget(self.title_label)
 
         layout.addStretch()
 
-        # Botão Add Song - estilo Spotify com hover suave
+        # Botão Add Song - mantém branco para ícones pretos
         self.add_song_button = QPushButton("+ Adicionar Música")
-        self.add_song_button.setFixedHeight(40)
-        self.add_song_button.setMinimumWidth(160)
+        self.add_song_button.setFixedHeight(44)
+        self.add_song_button.setMinimumWidth(180)
         self.add_song_button.setCursor(Qt.PointingHandCursor)
-        self.add_song_button.setStyleSheet(
-            """
+        self.add_song_button.setStyleSheet("""
             QPushButton {
-                background-color: #ffffff;
+                background-color: #FFFFFF;
                 color: #000000;
-                padding: 0px 24px;
+                padding: 0px 28px;
                 border: none;
-                border-radius: 20px;
+                border-radius: 22px;
                 font-size: 14px;
-                font-weight: bold;
-                letter-spacing: 0.5px;
+                font-weight: 600;
+                letter-spacing: 0.3px;
+                font-family: "SF Pro Display";
             }
             QPushButton:hover {
-                background-color: #f6f6f6;
-                transform: scale(1.02);
+                background-color: #B3B3B3;
+                transform: scale(1.04);
             }
             QPushButton:pressed {
-                background-color: #e0e0e0;
+                background-color: #A0A0A0;
             }
-            """
-        )
+        """)
         self.add_song_button.clicked.connect(lambda: self.addSongRequested.emit())
         layout.addWidget(self.add_song_button)
 
+        # Botão Save - mantém branco
         self.save_button = QPushButton("")
-        self.save_button.setFixedHeight(40)
-        self.save_button.setMinimumWidth(60)
+        self.save_button.setFixedSize(48, 44)
         self.save_button.setCursor(Qt.PointingHandCursor)
-        self.save_button.setStyleSheet(
-            """
+        self.save_button.setStyleSheet("""
             QPushButton {
-                background-color: #ffffff;
+                background-color: #FFFFFF;
                 color: #000000;
-                padding: 0px 16px;
                 border: none;
-                border-radius: 20px;
-                font-size: 14px;
-                font-weight: bold;
+                border-radius: 22px;
             }
             QPushButton:hover {
-                background-color: #f6f6f6;
+                background-color: #B3B3B3;
             }
             QPushButton:pressed {
-                background-color: #e0e0e0;
+                background-color: #A0A0A0;
             }
-            """
-        )
-        icon = self._load_save_icon(QSize(28, 28))
+        """)
+        icon = self._load_save_icon(QSize(24, 24))
         if icon:
             self.save_button.setIcon(icon)
-            self.save_button.setIconSize(QSize(28, 28))
+            self.save_button.setIconSize(QSize(24, 24))
         else:
-            self.save_button.setText("Salvar")
+            self.save_button.setText("💾")
+            self.save_button.setStyleSheet(self.save_button.styleSheet() + """
+                QPushButton {
+                    font-size: 18px;
+                }
+            """)
         self.save_button.clicked.connect(lambda: self.saveRequested.emit())
         layout.addWidget(self.save_button)
 
-        # Espaçamento antes dos controles
-        layout.addSpacing(32)
+        # Botão Settings - mantém branco
+        self.settings_button = QPushButton("")
+        self.settings_button.setFixedSize(48, 44)
+        self.settings_button.setCursor(Qt.PointingHandCursor)
+        self.settings_button.setStyleSheet("""
+            QPushButton {
+                background-color: #FFFFFF;
+                color: #000000;
+                border: none;
+                border-radius: 22px;
+            }
+            QPushButton:hover {
+                background-color: #B3B3B3;
+            }
+            QPushButton:pressed {
+                background-color: #A0A0A0;
+            }
+        """)
+        settings_icon = self._load_settings_icon(QSize(22, 22))
+        if settings_icon:
+            self.settings_button.setIcon(settings_icon)
+            self.settings_button.setIconSize(QSize(22, 22))
+        else:
+            self.settings_button.setText("⚙")
+            self.settings_button.setStyleSheet(self.settings_button.styleSheet() + """
+                QPushButton {
+                    font-size: 18px;
+                }
+            """)
+        self.settings_button.clicked.connect(lambda: self.settingsRequested.emit())
+        layout.addWidget(self.settings_button)
 
-        # Botões de controle - estilo minimalista Spotify
+        # Divisor visual sutil
+        separator = QWidget()
+        separator.setFixedSize(1, 32)
+        separator.setStyleSheet("background-color: #282828;")
+        layout.addWidget(separator)
+
+        # Botões de controle - estilo moderno Spotify
         self.play_button = QPushButton("▶")
-        self.pause_button = QPushButton("❚❚")
-        self.restart_button = QPushButton("⟲")
+        self.pause_button = QPushButton("⏸")
+        self.restart_button = QPushButton("↻")
 
         control_style = """
             QPushButton {
-                background-color: transparent;
-                color: #b3b3b3;
+                background-color: #282828;
+                color: #B3B3B3;
                 border: none;
                 border-radius: 20px;
                 padding: 0px;
-                font-size: 18px;
+                font-size: 16px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                color: #ffffff;
-                background-color: #1a1a1a;
+                background-color: #333333;
+                color: #FFFFFF;
+                transform: scale(1.1);
             }
             QPushButton:pressed {
-                color: #ffffff;
-                background-color: #282828;
+                background-color: #1ED760;
+                color: #000000;
             }
             QPushButton[active="true"] {
-                color: #1db954;
+                background-color: #1ED760;
+                color: #000000;
             }
         """
 
@@ -146,6 +196,24 @@ class HeaderWidget(QWidget):
             pass
         if qtawesome:
             for name in ['fa5s.save', 'fa.save', 'mdi.content-save']:
+                try:
+                    return qtawesome.icon(name, color='#000000')
+                except Exception:
+                    continue
+        return None
+
+    def _load_settings_icon(self, size):
+        try:
+            base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            for folder in [base_path, os.path.join(base_path, 'Resources')]:
+                path = os.path.join(folder, 'settings.svg')
+                if os.path.exists(path):
+                    icon = QIcon(path)
+                    return icon
+        except Exception:
+            pass
+        if qtawesome:
+            for name in ['fa5s.cog', 'fa.cog', 'mdi.cog']:
                 try:
                     return qtawesome.icon(name, color='#000000')
                 except Exception:
