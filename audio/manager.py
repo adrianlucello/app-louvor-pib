@@ -15,6 +15,8 @@ class AudioManager(QObject):
         self.current_song = None
         self._is_playing = False
         self.lr_enabled = False
+        self.output_device = None
+        self.input_device = None
         
     def set_current_song(self, song_data):
         """Set the current song and initialize its audio player"""
@@ -26,6 +28,11 @@ class AudioManager(QObject):
             player = AudioPlayer()
             try:
                 player.set_lr_mode(self.lr_enabled)
+            except Exception:
+                pass
+            try:
+                if self.output_device is not None:
+                    player.set_output_device(self.output_device)
             except Exception:
                 pass
             # Load all tracks for this song
@@ -43,6 +50,28 @@ class AudioManager(QObject):
         for p in self.players.values():
             try:
                 p.set_lr_mode(self.lr_enabled)
+            except Exception:
+                pass
+
+    def set_output_device(self, device):
+        self.output_device = device
+        for p in self.players.values():
+            try:
+                p.set_output_device(device)
+            except Exception:
+                pass
+        try:
+            if self._is_playing and self.current_player:
+                self.current_player.stop()
+                self.current_player.play_all()
+        except Exception:
+            pass
+
+    def set_input_device(self, device):
+        self.input_device = device
+        for p in self.players.values():
+            try:
+                p.set_input_device(device)
             except Exception:
                 pass
         

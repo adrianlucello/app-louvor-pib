@@ -319,7 +319,7 @@ class MasterTrackControl(QWidget):
 
     def setup_ui(self):
         # Largura um pouco maior para evitar corte visual
-        self.setFixedWidth(200)
+        self.setFixedWidth(240)
         # Fundo cinza igual aos outros faders; canto esquerdo reto para encostar na borda
         self.setStyleSheet("background-color: #252525; border-top-left-radius: 0px; border-bottom-left-radius: 0px; border-top-right-radius: 10px; border-bottom-right-radius: 10px;")
         # Garante que o QSS pinte o fundo do QWidget
@@ -345,11 +345,45 @@ class MasterTrackControl(QWidget):
         self.volume_fader.setValue(80)
         self.volume_fader.setInvertedAppearance(False)
         self.volume_fader.setFixedHeight(300)
-        # Centraliza o fader no container usando uma linha com stretches nas laterais
         fader_row = QHBoxLayout()
         fader_row.setContentsMargins(0, 0, 0, 0)
+        fader_row.setSpacing(10)
         fader_row.addStretch(1)
         fader_row.addWidget(self.volume_fader)
+
+        actions_container = QWidget()
+        actions_layout = QVBoxLayout(actions_container)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(8)
+
+        btn_style = (
+            "QPushButton { background-color: #1e1e1e; color: #ffffff; border-radius: 8px; padding: 6px 12px; }"
+            "QPushButton:hover { background-color: #2a2a2a; }"
+            "QPushButton:pressed { background-color: #3a3a3a; }"
+            "QPushButton[active=\"true\"] { background-color: #1ED760; color: #000000; border: 2px solid #1ED760; }"
+        )
+
+        self.mapear_button = QPushButton("Mapear")
+        self.mapear_button.setStyleSheet(btn_style)
+        self.mapear_button.setFixedHeight(32)
+        actions_layout.addWidget(self.mapear_button)
+
+        self.pad_button = QPushButton("Pad")
+        self.pad_button.setStyleSheet(btn_style)
+        self.pad_button.setFixedHeight(28)
+        actions_layout.addWidget(self.pad_button)
+
+        self.ajuste_button = QPushButton("Ajuste")
+        self.ajuste_button.setStyleSheet(btn_style)
+        self.ajuste_button.setFixedHeight(28)
+        actions_layout.addWidget(self.ajuste_button)
+
+        self.recorte_button = QPushButton("Recorte")
+        self.recorte_button.setStyleSheet(btn_style)
+        self.recorte_button.setFixedHeight(28)
+        actions_layout.addWidget(self.recorte_button)
+
+        fader_row.addWidget(actions_container)
         fader_row.addStretch(1)
         layout.addLayout(fader_row)
 
@@ -456,6 +490,10 @@ class TracksPanel(QWidget):
         try:
             self.timeline_widget = TimelineWidget()
             self.timeline_widget.setVisible(False)
+            try:
+                self.timeline_widget.seekRequested.connect(self.on_timeline_seek_requested)
+            except Exception:
+                pass
             layout.addWidget(self.timeline_widget)
         except Exception:
             self.timeline_widget = None
@@ -723,6 +761,32 @@ class TracksPanel(QWidget):
             pass
         self._timeline_thread = None
         self._timeline_worker = None
+
+    def on_timeline_seek_requested(self, frac: float):
+        """Handle seek requests from the timeline. Only seeks when not playing (paused or stopped)."""
+        try:
+            # Allow seek only when not playing (paused or stopped)
+            if self.audio_manager.is_playing():
+                return
+            player = self.audio_manager.current_player
+            if not player:
+                return
+            if self.timeline_total_samples <= 0:
+                return
+            frac = max(0.0, min(1.0, float(frac)))
+            target = int(frac * float(self.timeline_total_samples))
+            # Set player's position and update the visual playhead
+            try:
+                if hasattr(player, 'seek_to_sample'):
+                    player.seek_to_sample(target)
+                else:
+                    player.current_position = target
+            except Exception:
+                player.current_position = target
+            if self.timeline_widget:
+                self.timeline_widget.set_playhead_fraction(frac)
+        except Exception:
+            pass
 
     def _toggle_card_blink(self):
         self._card_blink_on = not self._card_blink_on

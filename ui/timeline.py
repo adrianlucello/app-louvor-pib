@@ -5,6 +5,8 @@ import numpy as np
 
 
 class TimelineWidget(QWidget):
+    # Emite a fração (0..1) do ponto clicado para solicitar seek
+    seekRequested = pyqtSignal(float)
     def __init__(self, parent=None):
         super().__init__(parent)
         self._envelope = []
@@ -20,6 +22,20 @@ class TimelineWidget(QWidget):
     def set_playhead_fraction(self, frac):
         self._playhead_frac = max(0.0, min(1.0, float(frac)))
         self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            try:
+                w = max(1, self.width())
+                x = max(0, min(event.x(), w))
+                frac = x / float(w)
+                # Atualiza o playhead visual imediatamente
+                self.set_playhead_fraction(frac)
+                # Solicita seek ao controlador
+                self.seekRequested.emit(frac)
+            except Exception:
+                pass
+        super().mousePressEvent(event)
 
     def paintEvent(self, event):
         p = QPainter(self)

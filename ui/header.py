@@ -162,7 +162,6 @@ class HeaderWidget(QWidget):
             QPushButton:hover {
                 background-color: #333333;
                 color: #FFFFFF;
-                transform: scale(1.1);
             }
             QPushButton:pressed {
                 background-color: #1ED760;
@@ -171,6 +170,7 @@ class HeaderWidget(QWidget):
             QPushButton[active="true"] {
                 background-color: #1ED760;
                 color: #000000;
+                border: 2px solid #1ED760;
             }
         """
 
@@ -228,3 +228,15 @@ class HeaderWidget(QWidget):
         self.play_button.style().unpolish(self.play_button)
         self.play_button.style().polish(self.play_button)
         self.play_button.update()
+
+    def set_pause_blink(self, on: bool):
+        self.pause_button.setProperty("active", bool(on))
+        self.pause_button.style().unpolish(self.pause_button)
+        self.pause_button.style().polish(self.pause_button)
+        self.pause_button.update()
+
+    def set_restart_blink(self, on: bool):
+        self.restart_button.setProperty("active", bool(on))
+        self.restart_button.style().unpolish(self.restart_button)
+        self.restart_button.style().polish(self.restart_button)
+        self.restart_button.update()

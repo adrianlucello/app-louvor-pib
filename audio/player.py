@@ -22,6 +22,8 @@ class AudioPlayer(QObject):
         self.playback_thread = None
         self.should_stop = False
         self.lr_enabled = False
+        self.output_device = None
+        self.input_device = None
         
     def load_track(self, file_path):
         """Load an audio track from file"""
@@ -79,6 +81,27 @@ class AudioPlayer(QObject):
     def set_lr_mode(self, enabled: bool):
         """Enable/disable LR routing mode."""
         self.lr_enabled = bool(enabled)
+
+    def set_output_device(self, device):
+        try:
+            self.output_device = device
+            if self.stream:
+                try:
+                    self.stream.stop()
+                    self.stream.close()
+                except:
+                    pass
+                self.stream = None
+                if self._is_playing and not self._is_paused:
+                    self._start_playback_thread()
+        except Exception:
+            pass
+
+    def set_input_device(self, device):
+        try:
+            self.input_device = device
+        except Exception:
+            pass
             
     def play_all(self):
         """Play all loaded tracks simultaneously"""
@@ -149,6 +172,35 @@ class AudioPlayer(QObject):
     def is_paused(self):
         """Check if tracks are currently paused"""
         return self._is_paused
+
+    def seek_to_fraction(self, frac: float):
+        """Seek to a position given by fraction (0..1) of the song length. Disabled while playing."""
+        try:
+            if self.is_playing():
+                return False
+            max_length = max(len(t['samples']) for t in self.tracks) if self.tracks else 0
+            if max_length <= 0:
+                return False
+            frac = max(0.0, min(1.0, float(frac)))
+            idx = int(frac * max_length)
+            return self.seek_to_sample(idx)
+        except Exception:
+            return False
+
+    def seek_to_sample(self, index: int):
+        """Seek to a specific sample index. Disabled while playing."""
+        try:
+            if self.is_playing():
+                return False
+            max_length = max(len(t['samples']) for t in self.tracks) if self.tracks else 0
+            if max_length <= 0:
+                return False
+            index = int(index)
+            index = max(0, min(index, max_length - 1))
+            self.current_position = index
+            return True
+        except Exception:
+            return False
         
     def _playback_worker(self):
         """Worker function for audio playback in separate thread"""
@@ -248,12 +300,18 @@ class AudioPlayer(QObject):
                     print(f"Error in audio callback: {e}")
                     
             # Start playback - using the original approach that worked
-            self.stream = sd.OutputStream(
-                samplerate=sample_rate,
-                channels=2,
-                callback=audio_callback,
-                blocksize=blocksize
-            )
+            kwargs = {
+                'samplerate': sample_rate,
+                'channels': 2,
+                'callback': audio_callback,
+                'blocksize': blocksize
+            }
+            try:
+                if self.output_device is not None:
+                    kwargs['device'] = self.output_device
+            except Exception:
+                pass
+            self.stream = sd.OutputStream(**kwargs)
             self.stream.start()
             
             # Keep the stream alive while playing (but not while paused)

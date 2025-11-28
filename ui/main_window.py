@@ -1,7 +1,7 @@
 import sys
 from PyQt5.QtWidgets import (QMainWindow, QPushButton, QVBoxLayout, QWidget, QMessageBox, 
                              QStackedWidget, QHBoxLayout, QLabel, QFileDialog, QStyle)
-from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QSize, QRectF, QByteArray, QTimer
+from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QSize, QRectF, QByteArray, QTimer, QSettings
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPolygon, QFont, QGuiApplication
 from PyQt5.QtSvg import QSvgRenderer
 import os
@@ -14,6 +14,7 @@ from ui.song_form import SongForm
 from ui.tracks_panel import TracksPanel, TrackControl
 from ui.header import HeaderWidget
 from ui.settings_dialog import SettingsDialog
+from midi.manager import MidiManager
 import json
 
 class MainWindow(QMainWindow):
@@ -41,7 +42,67 @@ class MainWindow(QMainWindow):
         self.songs = []  # List to store all songs
         self.current_song = None  # Currently selected song
         # Settings
-        self.lr_enabled = False
+        try:
+            settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+            self.lr_enabled = bool(settings.value('lr_enabled', False, type=bool))
+        except Exception:
+            self.lr_enabled = False
+        # MIDI manager
+        try:
+            self.midi_manager = MidiManager()
+            try:
+                settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+                midi_name = settings.value('midi_input_name', '', type=str)
+                if midi_name:
+                    self.midi_manager.start_listening(midi_name)
+            except Exception:
+                pass
+            try:
+                self.midi_manager.messageReceived.connect(self.on_midi_message)
+            except Exception:
+                pass
+        except Exception:
+            self.midi_manager = None
+        # MIDI mapping state
+        self.midi_mappings = {}
+        self.midi_mapping_active = False
+        self.midi_mapping_selecting = False
+        self.midi_mapping_target_action = None
+        self._map_blink_on = False
+        self.map_blink_timer = QTimer(self)
+        self.map_blink_timer.setInterval(500)
+        self.map_blink_timer.timeout.connect(self._toggle_map_blink)
+        self._mapping_target_blink_on = False
+        self.mapping_target_blink_timer = QTimer(self)
+        self.mapping_target_blink_timer.setInterval(500)
+        self.mapping_target_blink_timer.timeout.connect(self._toggle_mapping_target_blink)
+        # Load persisted MIDI mappings
+        try:
+            self._load_midi_mappings()
+        except Exception:
+            pass
+
+    def _ensure_midi_listening(self):
+        try:
+            if not self.midi_manager or not self.midi_manager.available():
+                return
+            settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+            name = settings.value('midi_input_name', '', type=str)
+            if not name:
+                try:
+                    names = self.midi_manager.list_input_names()
+                except Exception:
+                    names = []
+                if names:
+                    name = names[0]
+                    try:
+                        settings.setValue('midi_input_name', name)
+                    except Exception:
+                        pass
+            if name:
+                self.midi_manager.start_listening(name)
+        except Exception:
+            pass
         
     def create_initial_view(self):
         """Create the initial view with the pencil button"""
@@ -148,7 +209,7 @@ class MainWindow(QMainWindow):
             pass
         self.header_widget.playRequested.connect(self.handle_play_clicked)
         self.header_widget.pauseRequested.connect(self.handle_pause_clicked)
-        self.header_widget.restartRequested.connect(self.restart_current_song)
+        self.header_widget.restartRequested.connect(self.handle_restart_clicked)
         layout.addWidget(self.header_widget)
 
         self.play_blink_timer = QTimer(self)
@@ -169,6 +230,22 @@ class MainWindow(QMainWindow):
             self.tracks_panel.audio_manager.set_lr_mode(self.lr_enabled)
         except Exception:
             pass
+        try:
+            settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+            out_id = settings.value('audio_output_device', -1, type=int)
+            in_id = settings.value('audio_input_device', -1, type=int)
+            if out_id is not None and int(out_id) >= 0:
+                self.tracks_panel.audio_manager.set_output_device(int(out_id))
+            if in_id is not None and int(in_id) >= 0:
+                self.tracks_panel.audio_manager.set_input_device(int(in_id))
+        except Exception:
+            pass
+        try:
+            self.tracks_panel.master_control.mapear_button.clicked.connect(self.start_midi_mapping)
+        except Exception:
+            pass
+        # Ensure MIDI is listening when main view is created
+        self._ensure_midi_listening()
         layout.addWidget(self.tracks_panel)
         
         self.stacked_widget.addWidget(main_widget)
@@ -238,6 +315,14 @@ class MainWindow(QMainWindow):
 
     def handle_play_clicked(self):
         try:
+            if getattr(self, 'midi_mapping_active', False) and getattr(self, 'midi_mapping_selecting', False):
+                self.midi_mapping_target_action = 'play'
+                self.midi_mapping_selecting = False
+                self._mapping_target_blink_on = True
+                self.header_widget.set_play_blink(True)
+                if not self.mapping_target_blink_timer.isActive():
+                    self.mapping_target_blink_timer.start()
+                return
             if hasattr(self, 'tracks_panel') and self.tracks_panel:
                 self.tracks_panel.audio_manager.play_current_song()
                 self.start_play_blink()
@@ -246,9 +331,33 @@ class MainWindow(QMainWindow):
 
     def handle_pause_clicked(self):
         try:
+            if getattr(self, 'midi_mapping_active', False) and getattr(self, 'midi_mapping_selecting', False):
+                self.midi_mapping_target_action = 'pause'
+                self.midi_mapping_selecting = False
+                self._mapping_target_blink_on = True
+                if hasattr(self, 'header_widget') and self.header_widget:
+                    self.header_widget.set_pause_blink(True)
+                if not self.mapping_target_blink_timer.isActive():
+                    self.mapping_target_blink_timer.start()
+                return
             if hasattr(self, 'tracks_panel') and self.tracks_panel:
                 self.tracks_panel.audio_manager.pause_current_song()
                 self.stop_play_blink()
+        except Exception:
+            pass
+
+    def handle_restart_clicked(self):
+        try:
+            if getattr(self, 'midi_mapping_active', False) and getattr(self, 'midi_mapping_selecting', False):
+                self.midi_mapping_target_action = 'restart'
+                self.midi_mapping_selecting = False
+                self._mapping_target_blink_on = True
+                if hasattr(self, 'header_widget') and self.header_widget:
+                    self.header_widget.set_restart_blink(True)
+                if not self.mapping_target_blink_timer.isActive():
+                    self.mapping_target_blink_timer.start()
+                return
+            self.restart_current_song()
         except Exception:
             pass
 
@@ -262,6 +371,32 @@ class MainWindow(QMainWindow):
         self._play_blink_on = not self._play_blink_on
         if hasattr(self, 'header_widget') and self.header_widget:
             self.header_widget.set_play_blink(self._play_blink_on)
+
+    def _toggle_map_blink(self):
+        try:
+            self._map_blink_on = not self._map_blink_on
+            btn = getattr(self.tracks_panel.master_control, 'mapear_button', None)
+            if btn:
+                btn.setProperty("active", bool(self._map_blink_on))
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+                btn.update()
+        except Exception:
+            pass
+
+    def _toggle_mapping_target_blink(self):
+        try:
+            self._mapping_target_blink_on = not self._mapping_target_blink_on
+            if hasattr(self, 'header_widget') and self.header_widget:
+                action = getattr(self, 'midi_mapping_target_action', None)
+                if action == 'pause':
+                    self.header_widget.set_pause_blink(self._mapping_target_blink_on)
+                elif action == 'restart':
+                    self.header_widget.set_restart_blink(self._mapping_target_blink_on)
+                else:
+                    self.header_widget.set_play_blink(self._mapping_target_blink_on)
+        except Exception:
+            pass
 
     def start_play_blink(self):
         self._play_blink_on = True
@@ -365,6 +500,148 @@ class MainWindow(QMainWindow):
             msg_box.setText(f"An error occurred while selecting the song: {str(e)}")
             msg_box.setIcon(QMessageBox.Critical)
             msg_box.exec_()
+
+    def start_midi_mapping(self):
+        try:
+            # Toggle: if already in mapping mode and nothing mapped, cancel
+            if getattr(self, 'midi_mapping_active', False):
+                self._finish_midi_mapping()
+                return
+            # Start mapping mode
+            self._ensure_midi_listening()
+            self.midi_mapping_active = True
+            self.midi_mapping_selecting = True
+            self.midi_mapping_target_action = None
+            self._map_blink_on = True
+            try:
+                btn = self.tracks_panel.master_control.mapear_button
+                btn.setProperty("active", True)
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+                btn.update()
+            except Exception:
+                pass
+            if not self.map_blink_timer.isActive():
+                self.map_blink_timer.start()
+        except Exception:
+            pass
+
+    def _finish_midi_mapping(self):
+        try:
+            self.midi_mapping_active = False
+            self.midi_mapping_selecting = False
+            self.midi_mapping_target_action = None
+            try:
+                if self.map_blink_timer.isActive():
+                    self.map_blink_timer.stop()
+            except Exception:
+                pass
+            try:
+                if self.mapping_target_blink_timer.isActive():
+                    self.mapping_target_blink_timer.stop()
+            except Exception:
+                pass
+            try:
+                btn = self.tracks_panel.master_control.mapear_button
+                btn.setProperty("active", False)
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+                btn.update()
+            except Exception:
+                pass
+            try:
+                if hasattr(self, 'header_widget') and self.header_widget:
+                    self.header_widget.set_play_blink(False)
+                    self.header_widget.set_pause_blink(False)
+                    self.header_widget.set_restart_blink(False)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _save_midi_mappings(self):
+        try:
+            settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+            settings.setValue('midi_mappings', json.dumps(self.midi_mappings))
+        except Exception:
+            pass
+
+    def _load_midi_mappings(self):
+        try:
+            settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+            raw = settings.value('midi_mappings', '{}', type=str)
+            if isinstance(raw, dict):
+                # Unexpected type: already a dict
+                self.midi_mappings = raw
+            else:
+                try:
+                    data = json.loads(raw or '{}')
+                    if isinstance(data, dict):
+                        self.midi_mappings = data
+                except Exception:
+                    self.midi_mappings = {}
+        except Exception:
+            self.midi_mappings = {}
+
+    def _midi_signature(self, msg):
+        try:
+            t = getattr(msg, 'type', '')
+            ch = getattr(msg, 'channel', 0)
+            key = None
+            if t in ('note_on', 'note_off'):
+                key = getattr(msg, 'note', None)
+            elif t == 'control_change':
+                key = getattr(msg, 'control', None)
+            elif t == 'program_change':
+                key = getattr(msg, 'program', None)
+            else:
+                key = getattr(msg, 'note', getattr(msg, 'control', getattr(msg, 'program', None)))
+            return f"{t}:{key}:{ch}"
+        except Exception:
+            return str(msg)
+
+    def on_midi_message(self, msg):
+        try:
+            if getattr(self, 'midi_mapping_active', False):
+                if self.midi_mapping_target_action:
+                    t = getattr(msg, 'type', '')
+                    accepted = False
+                    try:
+                        if t == 'note_on' and getattr(msg, 'velocity', 0) > 0:
+                            accepted = True
+                        elif t == 'control_change' and getattr(msg, 'value', 0) > 0:
+                            accepted = True
+                        # Optional: allow program_change
+                        elif t == 'program_change':
+                            accepted = True
+                    except Exception:
+                        pass
+                    if accepted:
+                        sig = self._midi_signature(msg)
+                        self.midi_mappings[sig] = self.midi_mapping_target_action
+                        print(f"Mapped MIDI {sig} -> {self.midi_mapping_target_action}")
+                        try:
+                            self._save_midi_mappings()
+                        except Exception:
+                            pass
+                        self._finish_midi_mapping()
+                        return
+                    # Ignore other messages (e.g., note_off), keep waiting
+            else:
+                sig = self._midi_signature(msg)
+                action = self.midi_mappings.get(sig)
+                if action == 'play':
+                    # Avoid re-entering mapping path
+                    self.midi_mapping_active = False
+                    self.handle_play_clicked()
+                elif action == 'pause':
+                    self.midi_mapping_active = False
+                    self.handle_pause_clicked()
+                elif action == 'restart':
+                    self.midi_mapping_active = False
+                    self.handle_restart_clicked()
+        except Exception:
+            pass
 
     def add_tracks_to_song(self, song_data):
         """Add tracks to an existing song"""
@@ -725,6 +1002,15 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             try:
+                if hasattr(dlg, 'audioOutputDeviceSelected'):
+                    dlg.audioOutputDeviceSelected.connect(self.set_audio_output_device)
+                if hasattr(dlg, 'audioInputDeviceSelected'):
+                    dlg.audioInputDeviceSelected.connect(self.set_audio_input_device)
+                if hasattr(dlg, 'midiInputDeviceSelected'):
+                    dlg.midiInputDeviceSelected.connect(self.set_midi_input_device)
+            except Exception:
+                pass
+            try:
                 dlg.center_on_parent()
             except Exception:
                 pass
@@ -735,6 +1021,12 @@ class MainWindow(QMainWindow):
     def set_lr_mode(self, enabled: bool):
         try:
             self.lr_enabled = bool(enabled)
+            # Persist setting in OS key-value store (macOS CFPreferences)
+            try:
+                settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+                settings.setValue('lr_enabled', self.lr_enabled)
+            except Exception:
+                pass
             if hasattr(self, 'tracks_panel') and self.tracks_panel:
                 try:
                     self.tracks_panel.audio_manager.set_lr_mode(self.lr_enabled)
@@ -742,6 +1034,50 @@ class MainWindow(QMainWindow):
                     pass
         except Exception as e:
             print(f"Error setting LR mode: {e}")
+    
+    def set_audio_output_device(self, device_id):
+        try:
+            if hasattr(self, 'tracks_panel') and self.tracks_panel:
+                try:
+                    self.tracks_panel.audio_manager.set_output_device(device_id)
+                except Exception:
+                    pass
+            try:
+                settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+                settings.setValue('audio_output_device', int(device_id) if device_id is not None else -1)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"Error setting audio output device: {e}")
+
+    def set_audio_input_device(self, device_id):
+        try:
+            if hasattr(self, 'tracks_panel') and self.tracks_panel:
+                try:
+                    self.tracks_panel.audio_manager.set_input_device(device_id)
+                except Exception:
+                    pass
+            try:
+                settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+                settings.setValue('audio_input_device', int(device_id) if device_id is not None else -1)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"Error setting audio input device: {e}")
+
+    def set_midi_input_device(self, name: str):
+        try:
+            if self.midi_manager:
+                self.midi_manager.start_listening(name)
+            try:
+                settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+                settings.setValue('midi_input_name', name)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"Error setting MIDI input: {e}")
+
+    # Removed duplicate placeholder on_midi_message; mapping logic lives earlier in the file
         
     def save_project(self):
         try:
