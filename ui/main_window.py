@@ -1,7 +1,7 @@
 import sys
 from PyQt5.QtWidgets import (QMainWindow, QPushButton, QVBoxLayout, QWidget, QMessageBox, 
-                             QStackedWidget, QHBoxLayout, QLabel, QFileDialog, QStyle)
-from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QSize, QRectF, QByteArray, QTimer, QSettings
+                             QStackedWidget, QHBoxLayout, QLabel, QFileDialog, QStyle, QApplication, QDialog)
+from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QSize, QRectF, QByteArray, QTimer, QSettings, QStandardPaths, QUrl
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPolygon, QFont, QGuiApplication
 from PyQt5.QtSvg import QSvgRenderer
 import os
@@ -103,6 +103,68 @@ class MainWindow(QMainWindow):
                 self.midi_manager.start_listening(name)
         except Exception:
             pass
+
+    def _file_dialog_options(self):
+        try:
+            return QFileDialog.Options()
+        except Exception:
+            return QFileDialog.Options()
+
+    def _run_native_file_dialog(self, callable_fn):
+        """Temporarily disable global dark stylesheet/palette to avoid NSOpenPanel rendering bugs on macOS."""
+        try:
+            app = QApplication.instance()
+            if not app:
+                return callable_fn()
+            orig_stylesheet = app.styleSheet()
+            orig_palette = app.palette()
+            try:
+                app.setStyleSheet("")
+            except Exception:
+                pass
+            try:
+                app.setPalette(app.style().standardPalette())
+            except Exception:
+                pass
+            try:
+                result = callable_fn()
+            finally:
+                try:
+                    app.setStyleSheet(orig_stylesheet)
+                except Exception:
+                    pass
+                try:
+                    app.setPalette(orig_palette)
+                except Exception:
+                    pass
+            return result
+        except Exception:
+            return callable_fn()
+
+    def _start_dir(self):
+        try:
+            d = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
+            if d and os.path.isdir(d):
+                return d
+        except Exception:
+            pass
+        try:
+            d = QStandardPaths.writableLocation(QStandardPaths.HomeLocation)
+            if d and os.path.isdir(d):
+                return d
+        except Exception:
+            pass
+        return ''
+
+    # Unused: always start in Downloads to keep behavior consistent
+
+    # Not remembering last dir; always open in Downloads per UX requirement
+
+    # Remove custom native wrappers; rely on standard native dialogs
+
+    # Remove custom native wrappers; rely on standard native dialogs
+
+    # Remove custom native wrappers; rely on standard native dialogs
         
     def create_initial_view(self):
         """Create the initial view with the pencil button"""
@@ -720,18 +782,20 @@ class MainWindow(QMainWindow):
 
     def add_tracks_to_song(self, song_data):
         """Add tracks to an existing song"""
-        # Open file dialog to select audio tracks
+        # Open file dialog to select audio tracks (native panel; start in Downloads; no restrictions)
         file_paths, _ = QFileDialog.getOpenFileNames(
-            self, 
-            "Select Audio Tracks", 
-            "", 
-            "Audio Files (*.mp3 *.wav)"
+            self,
+            "Selecionar Faixas de Áudio",
+            self._start_dir(),
+            "Todos (*.*);;Arquivos de Áudio (*.mp3 *.wav)",
+            options=self._file_dialog_options()
         )
         
         if file_paths:
             # Add tracks to the song data
             song_data["tracks"].extend(file_paths)
             print(f"Added tracks to song: {song_data['name']}")
+            # Não lembramos diretório; sempre iniciamos em Downloads
             
             # If this is the currently selected song, update the tracks panel
             if song_data == self.current_song:
@@ -1172,7 +1236,13 @@ class MainWindow(QMainWindow):
                 default_name = f"{safe}.wproj"
             except Exception:
                 pass
-            path, _ = QFileDialog.getSaveFileName(self, "Salvar Projeto", default_name, "Projeto de Culto (*.wproj);;JSON (*.json)")
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Salvar Projeto",
+                os.path.join(self._start_dir(), default_name),
+                "Todos (*.*);;Projeto de Culto (*.wproj);;JSON (*.json)",
+                options=self._file_dialog_options()
+            )
             if not path:
                 return
             try:
@@ -1194,9 +1264,16 @@ class MainWindow(QMainWindow):
 
     def open_project(self):
         try:
-            path, _ = QFileDialog.getOpenFileName(self, "Abrir Projeto", "", "Projeto de Culto (*.wproj);;JSON (*.json);;Todos (*.*)")
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Abrir Projeto",
+                self._start_dir(),
+                "Todos (*.*);;Projeto de Culto (*.wproj);;JSON (*.json)",
+                options=self._file_dialog_options()
+            )
             if not path:
                 return
+            # Não lembramos diretório; sempre iniciamos em Downloads
             try:
                 with open(path, 'r', encoding='utf-8') as f:
                     data = json.load(f)

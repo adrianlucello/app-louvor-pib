@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                             QFileDialog, QMessageBox, QGroupBox, QListWidget, QListWidgetItem, QWidget, QSizePolicy, QScrollArea, QFrame)
-from PyQt5.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, QTimer, pyqtProperty, QThread, QObject, QEvent
+                             QFileDialog, QMessageBox, QGroupBox, QListWidget, QListWidgetItem, QWidget, QSizePolicy, QScrollArea, QFrame, QApplication)
+from PyQt5.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, QTimer, pyqtProperty, QThread, QObject, QEvent, QStandardPaths, QSettings
 from PyQt5.QtGui import QFont, QPixmap, QPainter, QPen, QColor
 import os
 from ui.tracks_panel import SongCardWidget
@@ -449,6 +449,72 @@ class SongForm(QDialog):
         
         # Atualiza estado inicial
         self.validate_form()
+
+    def _file_dialog_options(self):
+        try:
+            # Use native macOS open/save panels
+            return QFileDialog.Options()
+        except Exception:
+            return QFileDialog.Options()
+
+    def _run_native_file_dialog(self, callable_fn):
+        try:
+            app = QApplication.instance()
+            if not app:
+                return callable_fn()
+            orig_stylesheet = app.styleSheet()
+            orig_palette = app.palette()
+            try:
+                app.setStyleSheet("")
+            except Exception:
+                pass
+            try:
+                app.setPalette(app.style().standardPalette())
+            except Exception:
+                pass
+            try:
+                result = callable_fn()
+            finally:
+                try:
+                    app.setStyleSheet(orig_stylesheet)
+                except Exception:
+                    pass
+                try:
+                    app.setPalette(orig_palette)
+                except Exception:
+                    pass
+            return result
+        except Exception:
+            return callable_fn()
+
+    def _start_dir(self):
+        try:
+            d = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
+            if d and os.path.isdir(d):
+                return d
+        except Exception:
+            pass
+        try:
+            d = QStandardPaths.writableLocation(QStandardPaths.HomeLocation)
+            if d and os.path.isdir(d):
+                return d
+        except Exception:
+            pass
+        return ''
+
+    def _remember_dir(self, path):
+        try:
+            if path:
+                base = path
+                try:
+                    if os.path.isfile(path):
+                        base = os.path.dirname(path)
+                except Exception:
+                    pass
+                settings = QSettings('AdoraPlay', 'AppPythonAdrian')
+                settings.setValue('last_open_dir', base)
+        except Exception:
+            pass
         
     def on_ok_clicked(self):
         """Inicia loading e pré-computa a linha do tempo em background antes de aceitar"""
@@ -523,15 +589,17 @@ class SongForm(QDialog):
     def upload_tracks(self):
         """Abrir diálogo para selecionar faixas de áudio"""
         file_paths, _ = QFileDialog.getOpenFileNames(
-            self, 
-            "Selecionar Faixas de Áudio", 
-            "", 
-            "Arquivos de Áudio (*.wav)"
+            self,
+            "Selecionar Faixas de Áudio",
+            self._start_dir(),
+            "Todos (*.*);;Arquivos de Áudio (*.wav *.mp3)",
+            options=self._file_dialog_options()
         )
         
         if file_paths:
             self.selected_tracks.extend(file_paths)
             self.refresh_tracks_list()
+            # Sempre iniciamos em Downloads; não lembrar diretório
         
         self.validate_form()
             
@@ -540,8 +608,9 @@ class SongForm(QDialog):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Selecionar Imagem do Banner",
-            "",
-            "Arquivos de Imagem (*.png *.jpg *.jpeg *.bmp *.gif *.webp)"
+            self._start_dir(),
+            "Todos (*.*);;Arquivos de Imagem (*.png *.jpg *.jpeg *.bmp *.gif *.webp)",
+            options=self._file_dialog_options()
         )
         
         if file_path:
