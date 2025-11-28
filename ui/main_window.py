@@ -244,6 +244,10 @@ class MainWindow(QMainWindow):
             self.tracks_panel.master_control.mapear_button.clicked.connect(self.start_midi_mapping)
         except Exception:
             pass
+        try:
+            self.tracks_panel.master_control.volume_fader.clicked.connect(self.on_master_fader_clicked)
+        except Exception:
+            pass
         # Ensure MIDI is listening when main view is created
         self._ensure_midi_listening()
         layout.addWidget(self.tracks_panel)
@@ -387,8 +391,19 @@ class MainWindow(QMainWindow):
     def _toggle_mapping_target_blink(self):
         try:
             self._mapping_target_blink_on = not self._mapping_target_blink_on
-            if hasattr(self, 'header_widget') and self.header_widget:
-                action = getattr(self, 'midi_mapping_target_action', None)
+            action = getattr(self, 'midi_mapping_target_action', None)
+            if isinstance(action, str) and action.startswith('fader:'):
+                try:
+                    idx = int(action.split(':')[1])
+                    self.tracks_panel.set_fader_blink(idx, self._mapping_target_blink_on)
+                except Exception:
+                    pass
+            elif action == 'master_fader':
+                try:
+                    self.tracks_panel.set_master_fader_blink(self._mapping_target_blink_on)
+                except Exception:
+                    pass
+            elif hasattr(self, 'header_widget') and self.header_widget:
                 if action == 'pause':
                     self.header_widget.set_pause_blink(self._mapping_target_blink_on)
                 elif action == 'restart':
@@ -454,6 +469,10 @@ class MainWindow(QMainWindow):
                         track_control.volumeChanged.connect(self.tracks_panel.on_track_volume_changed)
                         track_control.muteChanged.connect(self.tracks_panel.on_track_mute_changed)
                         track_control.soloChanged.connect(self.tracks_panel.on_track_solo_changed)
+                        try:
+                            track_control.faderClicked.connect(self.on_track_fader_clicked)
+                        except Exception:
+                            pass
                         player_tracks = getattr(self.tracks_panel.audio_manager.current_player, 'tracks', [])
                         if 0 <= i < len(player_tracks):
                             vol = player_tracks[i].get('volume')
@@ -640,8 +659,64 @@ class MainWindow(QMainWindow):
                 elif action == 'restart':
                     self.midi_mapping_active = False
                     self.handle_restart_clicked()
+                elif isinstance(action, str) and action.startswith('fader:'):
+                    try:
+                        idx = int(action.split(':')[1])
+                        pct = self._midi_to_slider_pct(msg)
+                        if pct is not None and 0 <= idx < len(self.tracks_panel.track_controls):
+                            self.tracks_panel.track_controls[idx].volume_fader.setValue(pct)
+                    except Exception:
+                        pass
+                elif action == 'master_fader':
+                    try:
+                        pct = self._midi_to_slider_pct(msg)
+                        if pct is not None:
+                            self.tracks_panel.master_control.volume_fader.setValue(pct)
+                    except Exception:
+                        pass
         except Exception:
             pass
+
+    def on_track_fader_clicked(self, track_index):
+        try:
+            if getattr(self, 'midi_mapping_active', False) and getattr(self, 'midi_mapping_selecting', False):
+                self.midi_mapping_target_action = f"fader:{int(track_index)}"
+                self.midi_mapping_selecting = False
+                self._mapping_target_blink_on = True
+                self.tracks_panel.set_fader_blink(int(track_index), True)
+                if not self.mapping_target_blink_timer.isActive():
+                    self.mapping_target_blink_timer.start()
+        except Exception:
+            pass
+
+    def on_master_fader_clicked(self):
+        try:
+            if getattr(self, 'midi_mapping_active', False) and getattr(self, 'midi_mapping_selecting', False):
+                self.midi_mapping_target_action = 'master_fader'
+                self.midi_mapping_selecting = False
+                self._mapping_target_blink_on = True
+                self.tracks_panel.set_master_fader_blink(True)
+                if not self.mapping_target_blink_timer.isActive():
+                    self.mapping_target_blink_timer.start()
+        except Exception:
+            pass
+
+    def _midi_to_slider_pct(self, msg):
+        try:
+            t = getattr(msg, 'type', '')
+            v = None
+            if t == 'control_change':
+                v = getattr(msg, 'value', None)
+            elif t == 'note_on':
+                v = getattr(msg, 'velocity', None)
+            elif t == 'program_change':
+                v = getattr(msg, 'program', None)
+            if v is None:
+                return None
+            v = int(max(0, min(127, int(v))))
+            return int(round((v / 127.0) * 100))
+        except Exception:
+            return None
 
     def add_tracks_to_song(self, song_data):
         """Add tracks to an existing song"""

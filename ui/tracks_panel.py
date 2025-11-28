@@ -12,6 +12,7 @@ from audio.manager import AudioManager
 
 class CustomFader(QSlider):
     """Custom fader as a thin vertical line"""
+    clicked = pyqtSignal()
     def __init__(self, orientation, parent=None):
         super().__init__(orientation, parent)
         self.vu_level = 0.0
@@ -60,6 +61,11 @@ class CustomFader(QSlider):
         self.animation.start()
         
     def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            try:
+                self.clicked.emit()
+            except Exception:
+                pass
         if event.button() == Qt.LeftButton and self._handle_rect().contains(event.pos()):
             self.dragging = True
             self.setCursor(Qt.ClosedHandCursor)
@@ -108,6 +114,13 @@ class CustomFader(QSlider):
         painter.setPen(QPen(QColor("#2a2a2a"), 1))
         painter.setBrush(QColor("#4a4a4a"))
         painter.drawRoundedRect(fader_rect, 5, 5)
+        try:
+            if bool(self.property("active")):
+                painter.setPen(QPen(QColor("#1ED760"), 3))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(fader_rect.adjusted(-4, -4, 4, 4), 7, 7)
+        except Exception:
+            pass
         
         # Draw VU meter
         if self.vu_level > 0.02:
@@ -172,6 +185,7 @@ class TrackControl(QWidget):
     volumeChanged = pyqtSignal(int, float)  # track_index, volume
     muteChanged = pyqtSignal(int, bool)     # track_index, muted
     soloChanged = pyqtSignal(int, bool)     # track_index, solo_state
+    faderClicked = pyqtSignal(int)
     
     def __init__(self, track_index, track_name, parent=None):
         super().__init__(parent)
@@ -263,6 +277,10 @@ class TrackControl(QWidget):
         self.volume_fader.setInvertedAppearance(False)
         self.volume_fader.setFixedHeight(300)  # Keep height
         self.volume_fader.valueChanged.connect(self.on_volume_changed)
+        try:
+            self.volume_fader.clicked.connect(lambda: self.faderClicked.emit(self.track_index))
+        except Exception:
+            pass
         # Centralização exata: coloca o fader entre dois stretches
         fader_row = QHBoxLayout()
         fader_row.setContentsMargins(0, 0, 0, 0)
@@ -461,6 +479,43 @@ class TracksPanel(QWidget):
                 player.volumeLevelsChanged.connect(self.update_vu_meters)
             except Exception:
                 pass
+        except Exception:
+            pass
+
+    def set_fader_blink(self, track_index, on):
+        try:
+            if 0 <= track_index < len(self.track_controls):
+                f = self.track_controls[track_index].volume_fader
+                f.setProperty("active", bool(on))
+                f.style().unpolish(f)
+                f.style().polish(f)
+                f.update()
+        except Exception:
+            pass
+
+    def set_master_fader_blink(self, on):
+        try:
+            f = self.master_control.volume_fader
+            f.setProperty("active", bool(on))
+            f.style().unpolish(f)
+            f.style().polish(f)
+            f.update()
+        except Exception:
+            pass
+
+    def clear_all_fader_blink(self):
+        try:
+            for ctrl in self.track_controls:
+                f = ctrl.volume_fader
+                f.setProperty("active", False)
+                f.style().unpolish(f)
+                f.style().polish(f)
+                f.update()
+            f = self.master_control.volume_fader
+            f.setProperty("active", False)
+            f.style().unpolish(f)
+            f.style().polish(f)
+            f.update()
         except Exception:
             pass
             
