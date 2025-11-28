@@ -1241,13 +1241,13 @@ class MainWindow(QMainWindow):
                 default_name = f"{safe}.wproj"
             except Exception:
                 pass
-            path, _ = QFileDialog.getSaveFileName(
+            path, _ = self._run_native_file_dialog(lambda: QFileDialog.getSaveFileName(
                 self,
                 "Salvar Projeto",
                 os.path.join(self._start_dir(), default_name),
                 "Todos (*.*);;Projeto de Culto (*.wproj);;JSON (*.json)",
                 options=self._file_dialog_options()
-            )
+            ))
             if not path:
                 return
             try:
@@ -1269,13 +1269,13 @@ class MainWindow(QMainWindow):
 
     def open_project(self):
         try:
-            path, _ = QFileDialog.getOpenFileName(
+            path, _ = self._run_native_file_dialog(lambda: QFileDialog.getOpenFileName(
                 self,
                 "Abrir Projeto",
                 self._start_dir(),
                 "Todos (*.*);;Projeto de Culto (*.wproj);;JSON (*.json)",
                 options=self._file_dialog_options()
-            )
+            ))
             if not path:
                 return
             # Não lembramos diretório; sempre iniciamos em Downloads

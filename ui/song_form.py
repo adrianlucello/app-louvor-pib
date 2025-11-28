@@ -588,13 +588,13 @@ class SongForm(QDialog):
         
     def upload_tracks(self):
         """Abrir diálogo para selecionar faixas de áudio"""
-        file_paths, _ = QFileDialog.getOpenFileNames(
+        file_paths, _ = self._run_native_file_dialog(lambda: QFileDialog.getOpenFileNames(
             self,
             "Selecionar Faixas de Áudio",
             self._start_dir(),
             "Todos (*.*);;Arquivos de Áudio (*.wav *.mp3)",
             options=self._file_dialog_options()
-        )
+        ))
         
         if file_paths:
             self.selected_tracks.extend(file_paths)
@@ -605,13 +605,13 @@ class SongForm(QDialog):
             
     def upload_banner_image(self):
         """Abrir diálogo para selecionar imagem do banner"""
-        file_path, _ = QFileDialog.getOpenFileName(
+        file_path, _ = self._run_native_file_dialog(lambda: QFileDialog.getOpenFileName(
             self,
             "Selecionar Imagem do Banner",
             self._start_dir(),
             "Todos (*.*);;Arquivos de Imagem (*.png *.jpg *.jpeg *.bmp *.gif *.webp)",
             options=self._file_dialog_options()
-        )
+        ))
         
         if file_path:
             self.banner_image_path = file_path
