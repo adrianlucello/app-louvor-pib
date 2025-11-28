@@ -45,8 +45,17 @@ class MainWindow(QMainWindow):
         try:
             settings = QSettings('AdoraPlay', 'AppPythonAdrian')
             self.lr_enabled = bool(settings.value('lr_enabled', False, type=bool))
+            # Load saved audio devices
+            self.current_output_device = settings.value('audio_output_device', -1, type=int)
+            if self.current_output_device == -1:
+                self.current_output_device = None
+            self.current_input_device = settings.value('audio_input_device', -1, type=int)
+            if self.current_input_device == -1:
+                self.current_input_device = None
         except Exception:
             self.lr_enabled = False
+            self.current_output_device = None
+            self.current_input_device = None
         # MIDI manager
         try:
             self.midi_manager = MidiManager()
@@ -1155,6 +1164,12 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             try:
+                # Set current devices in the dialog
+                if hasattr(dlg, 'set_current_devices'):
+                    dlg.set_current_devices(self.current_output_device, self.current_input_device)
+            except Exception:
+                pass
+            try:
                 dlg.center_on_parent()
             except Exception:
                 pass
@@ -1181,21 +1196,26 @@ class MainWindow(QMainWindow):
     
     def set_audio_output_device(self, device_id):
         try:
+            print(f"[MainWindow] set_audio_output_device called with: {device_id}")
+            self.current_output_device = device_id
             if hasattr(self, 'tracks_panel') and self.tracks_panel:
                 try:
+                    print(f"[MainWindow] Calling audio_manager.set_output_device({device_id})")
                     self.tracks_panel.audio_manager.set_output_device(device_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[MainWindow] Error setting device on audio_manager: {e}")
             try:
                 settings = QSettings('AdoraPlay', 'AppPythonAdrian')
                 settings.setValue('audio_output_device', int(device_id) if device_id is not None else -1)
-            except Exception:
-                pass
+                print(f"[MainWindow] Saved device to settings: {device_id}")
+            except Exception as e:
+                print(f"[MainWindow] Error saving to settings: {e}")
         except Exception as e:
             print(f"Error setting audio output device: {e}")
 
     def set_audio_input_device(self, device_id):
         try:
+            self.current_input_device = device_id
             if hasattr(self, 'tracks_panel') and self.tracks_panel:
                 try:
                     self.tracks_panel.audio_manager.set_input_device(device_id)

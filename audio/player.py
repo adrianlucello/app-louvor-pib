@@ -93,18 +93,41 @@ class AudioPlayer(QObject):
 
     def set_output_device(self, device):
         try:
+            print(f"[AudioPlayer] set_output_device called with: {device}")
             self.output_device = device
+            # If there's an active stream, we need to stop it completely
             if self.stream:
+                print(f"[AudioPlayer] Active stream found, stopping it")
+                was_playing = self._is_playing and not self._is_paused
+                current_pos = self.current_position
+                
+                # Stop the stream and wait for thread to finish
                 try:
-                    self.stream.stop()
-                    self.stream.close()
-                except:
-                    pass
-                self.stream = None
-                if self._is_playing and not self._is_paused:
+                    self.should_stop = True
+                    self._is_playing = False
+                    if self.stream:
+                        self.stream.stop()
+                        self.stream.close()
+                        self.stream = None
+                    # Wait for playback thread to finish
+                    if self.playback_thread and self.playback_thread.is_alive():
+                        self.playback_thread.join(timeout=0.5)
+                    print(f"[AudioPlayer] Stream stopped successfully")
+                except Exception as e:
+                    print(f"[AudioPlayer] Error stopping stream: {e}")
+                
+                # Reset state and restart if it was playing
+                self.should_stop = False
+                if was_playing:
+                    print(f"[AudioPlayer] Restarting playback with new device {device}")
+                    self.current_position = current_pos
+                    self._is_playing = True
+                    self._is_paused = False
                     self._start_playback_thread()
-        except Exception:
-            pass
+            else:
+                print(f"[AudioPlayer] No active stream, device set to {device}")
+        except Exception as e:
+            print(f"[AudioPlayer] Error in set_output_device: {e}")
 
     def set_input_device(self, device):
         try:
@@ -241,8 +264,49 @@ class AudioPlayer(QObject):
                 return
                 
             sample_rate = self.tracks[0]['sample_rate']
-            # Increase blocksize to reduce CPU wake-ups and improve stability
             blocksize = 2048
+            try:
+                default_pair = sd.default.device
+            except Exception:
+                default_pair = None
+            device_id = self.output_device
+            if isinstance(device_id, str):
+                try:
+                    device_id = int(device_id)
+                except Exception:
+                    device_id = None
+            devices = sd.query_devices()
+            def _valid_out(idx):
+                try:
+                    return isinstance(idx, int) and 0 <= idx < len(devices) and int(devices[idx].get('max_output_channels', 0)) > 0
+                except Exception:
+                    return False
+            if not _valid_out(device_id):
+                candidate = default_pair[1] if default_pair else None
+                device_id = candidate if _valid_out(candidate) else None
+            out_channels = 2
+            if _valid_out(device_id):
+                try:
+                    ch = int(devices[device_id].get('max_output_channels', 0))
+                    out_channels = 2 if ch >= 2 else 1
+                except Exception:
+                    out_channels = 2
+            else:
+                try:
+                    idx2 = next((i for i, d in enumerate(devices) if int(d.get('max_output_channels', 0)) >= 2), None)
+                except Exception:
+                    idx2 = None
+                if idx2 is None:
+                    try:
+                        idx2 = next((i for i, d in enumerate(devices) if int(d.get('max_output_channels', 0)) >= 1), None)
+                    except Exception:
+                        idx2 = None
+                device_id = idx2
+                try:
+                    ch = int(devices[device_id].get('max_output_channels', 0)) if device_id is not None else 2
+                    out_channels = 2 if ch >= 2 else 1
+                except Exception:
+                    out_channels = 2
             
             # Create a callback function for audio playback
             def audio_callback(outdata, frames, time, status):
@@ -250,8 +314,7 @@ class AudioPlayer(QObject):
                     if self.should_stop or not self._is_playing:
                         raise sd.CallbackStop()
                         
-                    # Initialize output buffer
-                    mixed_audio = np.zeros((frames, 2), dtype=np.float32)
+                    mixed_audio = np.zeros((frames, out_channels), dtype=np.float32)
                     
                     # Calculate volume levels for each track
                     new_volume_levels = []
@@ -289,9 +352,12 @@ class AudioPlayer(QObject):
                             else:
                                 new_volume_levels.append(0.0)
                             
-                            # Add to mixed audio
                             mix_end_idx = min(len(track_samples), len(mixed_audio))
-                            mixed_audio[:mix_end_idx] += track_samples[:mix_end_idx]
+                            if out_channels >= 2:
+                                mixed_audio[:mix_end_idx] += track_samples[:mix_end_idx]
+                            else:
+                                mono = np.mean(track_samples[:mix_end_idx], axis=1)
+                                mixed_audio[:mix_end_idx, 0] += mono
                         else:
                             new_volume_levels.append(0.0)
                     
@@ -328,20 +394,25 @@ class AudioPlayer(QObject):
                     
             # Start playback - using the original approach that worked
             kwargs = {
-                'samplerate': sample_rate,
-                'channels': 2,
+                'samplerate': int(sample_rate),
+                'channels': int(out_channels),
                 'callback': audio_callback,
-                'blocksize': blocksize,
+                'blocksize': int(blocksize),
                 'dtype': 'float32',
                 'latency': 'high',
             }
             try:
-                if self.output_device is not None:
-                    kwargs['device'] = self.output_device
-            except Exception:
-                pass
+                if _valid_out(device_id):
+                    kwargs['device'] = device_id
+                    print(f"[AudioPlayer] Creating stream with device_id: {device_id}")
+                else:
+                    print(f"[AudioPlayer] Creating stream with default device (device_id {device_id} not valid)")
+            except Exception as e:
+                print(f"[AudioPlayer] Error setting device in kwargs: {e}")
             self.stream = sd.OutputStream(**kwargs)
             self.stream.start()
+            print(f"[AudioPlayer] Stream started successfully")
+            
             
             # Keep the stream alive while playing (but not while paused)
             while self._is_playing and not self.should_stop:

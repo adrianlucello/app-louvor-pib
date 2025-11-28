@@ -109,7 +109,7 @@ class ToggleSwitch(QWidget):
 
 
 class TwoLineItemDelegate(QStyledItemDelegate):
-    def __init__(self, parent=None, subtitle_role=Qt.UserRole, default_role=Qt.UserRole + 1):
+    def __init__(self, parent=None, subtitle_role=Qt.UserRole + 2, default_role=Qt.UserRole + 3):
         super().__init__(parent)
         self.subtitle_role = subtitle_role
         self.default_role = default_role
@@ -221,6 +221,9 @@ class SettingsDialog(QDialog):
         self.setMaximumSize(540, 800)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.radius = 24
+        
+        # Flag to track if signals are connected
+        self._signals_connected = False
         
         # Estilo moderno com gradiente
         self.setStyleSheet("""
@@ -722,6 +725,14 @@ class SettingsDialog(QDialog):
         
         main_layout.addWidget(footer)
 
+    def set_current_devices(self, output_device_id, input_device_id):
+        """Set the currently selected devices (to be called before showing the dialog)"""
+        try:
+            self._desired_output_device = output_device_id
+            self._desired_input_device = input_device_id
+        except Exception:
+            pass
+
     def showEvent(self, event):
         super().showEvent(event)
         self.updateMask()
@@ -754,6 +765,14 @@ class SettingsDialog(QDialog):
 
     def _populate_audio_devices(self):
         try:
+            # Temporarily disconnect signals to avoid triggering during population
+            if self._signals_connected:
+                try:
+                    self.input_combo.currentIndexChanged.disconnect(self._on_input_changed)
+                    self.output_combo.currentIndexChanged.disconnect(self._on_output_changed)
+                except Exception:
+                    pass
+            
             devices = sd.query_devices()
             try:
                 default_in, default_out = sd.default.device
@@ -770,11 +789,11 @@ class SettingsDialog(QDialog):
                     subtitle = f"Canais: {d.get('max_input_channels', 0)} • {int(d.get('default_samplerate', 0))} Hz"
                     is_def = (default_in == idx)
                     display = f"{name}" + (" • padrão" if is_def else "")
-                    self.input_combo.addItem(display, idx)
+                    self.input_combo.addItem(display, idx)  # idx is the device ID
                     row = self.input_combo.count() - 1
                     mi = self.input_combo.model().index(row, 0)
-                    self.input_combo.model().setData(mi, subtitle, Qt.UserRole)
-                    self.input_combo.model().setData(mi, is_def, Qt.UserRole + 1)
+                    self.input_combo.model().setData(mi, subtitle, Qt.UserRole + 2)  # Use +2 to avoid overwriting device ID
+                    self.input_combo.model().setData(mi, is_def, Qt.UserRole + 3)
                     tip = f"{name}\nEntrada • {subtitle}"
                     self.input_combo.setItemData(row, tip, Qt.ToolTipRole)
 
@@ -785,33 +804,54 @@ class SettingsDialog(QDialog):
                     subtitle = f"Canais: {d.get('max_output_channels', 0)} • {int(d.get('default_samplerate', 0))} Hz"
                     is_def = (default_out == idx)
                     display = f"{name}" + (" • padrão" if is_def else "")
-                    self.output_combo.addItem(display, idx)
+                    self.output_combo.addItem(display, idx)  # idx is the device ID
                     row = self.output_combo.count() - 1
                     mo = self.output_combo.model().index(row, 0)
-                    self.output_combo.model().setData(mo, subtitle, Qt.UserRole)
-                    self.output_combo.model().setData(mo, is_def, Qt.UserRole + 1)
+                    self.output_combo.model().setData(mo, subtitle, Qt.UserRole + 2)  # Use +2 to avoid overwriting device ID
+                    self.output_combo.model().setData(mo, is_def, Qt.UserRole + 3)
                     tip = f"{name}\nSaída • {subtitle}"
                     self.output_combo.setItemData(row, tip, Qt.ToolTipRole)
 
-            # Select defaults
-            if default_in is not None:
-                i = next((i for i in range(self.input_combo.count()) if self.input_combo.itemData(i) == default_in), -1)
+            # Select devices - prefer desired devices over defaults
+            # Input device selection
+            input_to_select = None
+            if hasattr(self, '_desired_input_device') and self._desired_input_device is not None:
+                input_to_select = self._desired_input_device
+            elif default_in is not None:
+                input_to_select = default_in
+            
+            if input_to_select is not None:
+                i = next((i for i in range(self.input_combo.count()) if self.input_combo.itemData(i) == input_to_select), -1)
                 if i >= 0:
                     self.input_combo.setCurrentIndex(i)
-            if default_out is not None:
-                o = next((i for i in range(self.output_combo.count()) if self.output_combo.itemData(i) == default_out), -1)
+            
+            # Output device selection
+            output_to_select = None
+            if hasattr(self, '_desired_output_device') and self._desired_output_device is not None:
+                output_to_select = self._desired_output_device
+            elif default_out is not None:
+                output_to_select = default_out
+            
+            if output_to_select is not None:
+                o = next((i for i in range(self.output_combo.count()) if self.output_combo.itemData(i) == output_to_select), -1)
                 if o >= 0:
                     self.output_combo.setCurrentIndex(o)
 
-            # Connect signals once
-            try:
-                self.input_combo.currentIndexChanged.connect(self._on_input_changed)
-            except Exception:
-                pass
-            try:
-                self.output_combo.currentIndexChanged.connect(self._on_output_changed)
-            except Exception:
-                pass
+            # Connect signals only once
+            if not self._signals_connected:
+                try:
+                    self.input_combo.currentIndexChanged.connect(self._on_input_changed)
+                    self.output_combo.currentIndexChanged.connect(self._on_output_changed)
+                    self._signals_connected = True
+                except Exception:
+                    pass
+            else:
+                # Reconnect signals after population
+                try:
+                    self.input_combo.currentIndexChanged.connect(self._on_input_changed)
+                    self.output_combo.currentIndexChanged.connect(self._on_output_changed)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -826,10 +866,12 @@ class SettingsDialog(QDialog):
     def _on_output_changed(self, idx):
         try:
             device_id = self.output_combo.itemData(idx)
+            print(f"[Settings] Output device changed to: {device_id}")
             sd.default.device = (sd.default.device[0] if sd.default.device else None, device_id)
             self.audioOutputDeviceSelected.emit(device_id)
-        except Exception:
-            pass
+            print(f"[Settings] Signal emitted for device: {device_id}")
+        except Exception as e:
+            print(f"[Settings] Error in _on_output_changed: {e}")
 
     def _populate_midi_devices(self):
         try:
@@ -856,8 +898,8 @@ class SettingsDialog(QDialog):
                 self.midi_input_combo.addItem(n, n)
                 row = self.midi_input_combo.count() - 1
                 mi = self.midi_input_combo.model().index(row, 0)
-                self.midi_input_combo.model().setData(mi, "Porta de entrada MIDI", Qt.UserRole)
-                self.midi_input_combo.model().setData(mi, False, Qt.UserRole + 1)
+                self.midi_input_combo.model().setData(mi, "Porta de entrada MIDI", Qt.UserRole + 2)
+                self.midi_input_combo.model().setData(mi, False, Qt.UserRole + 3)
                 self.midi_input_combo.setItemData(row, f"{n}\nEntrada MIDI", Qt.ToolTipRole)
             try:
                 self.midi_input_combo.currentIndexChanged.connect(self._on_midi_input_changed)
@@ -869,8 +911,8 @@ class SettingsDialog(QDialog):
                 self.midi_output_combo.addItem(n, n)
                 row = self.midi_output_combo.count() - 1
                 mo = self.midi_output_combo.model().index(row, 0)
-                self.midi_output_combo.model().setData(mo, "Porta de saída MIDI", Qt.UserRole)
-                self.midi_output_combo.model().setData(mo, False, Qt.UserRole + 1)
+                self.midi_output_combo.model().setData(mo, "Porta de saída MIDI", Qt.UserRole + 2)
+                self.midi_output_combo.model().setData(mo, False, Qt.UserRole + 3)
                 self.midi_output_combo.setItemData(row, f"{n}\nSaída MIDI", Qt.ToolTipRole)
             if names_in:
                 self.midi_list.addItem("Entradas:")

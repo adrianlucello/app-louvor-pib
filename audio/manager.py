@@ -1,4 +1,5 @@
 import threading
+import time
 from PyQt5.QtCore import QObject, pyqtSignal
 from audio.player import AudioPlayer
 
@@ -88,18 +89,43 @@ class AudioManager(QObject):
                 pass
 
     def set_output_device(self, device):
+        print(f"[AudioManager] set_output_device called with: {device}")
         self.output_device = device
+        # Store playback state before changing device
+        was_playing = self._is_playing
+        current_position = None
+        
+        # If currently playing, stop and save position
+        if was_playing and self.current_player:
+            try:
+                print(f"[AudioManager] Stopping current playback to change device")
+                current_position = self.current_player.current_position
+                self.current_player.stop()
+                # Wait for the playback thread to fully stop
+                time.sleep(0.1)  # Small delay to ensure clean shutdown
+            except Exception as e:
+                print(f"[AudioManager] Error stopping playback: {e}")
+        
+        # Update device for all players
         for p in self.players.values():
             try:
+                print(f"[AudioManager] Setting device {device} on player")
                 p.set_output_device(device)
-            except Exception:
-                pass
-        try:
-            if self._is_playing and self.current_player:
-                self.current_player.stop()
+            except Exception as e:
+                print(f"[AudioManager] Error setting device on player: {e}")
+        
+        # Resume playback if it was playing before
+        if was_playing and self.current_player:
+            try:
+                print(f"[AudioManager] Resuming playback with new device")
+                # Restore position if we saved it
+                if current_position is not None:
+                    self.current_player.current_position = current_position
                 self.current_player.play_all()
-        except Exception:
-            pass
+                self._is_playing = True
+                self.playbackStateChanged.emit(True)
+            except Exception as e:
+                print(f"[AudioManager] Error resuming playback: {e}")
 
     def set_input_device(self, device):
         self.input_device = device
