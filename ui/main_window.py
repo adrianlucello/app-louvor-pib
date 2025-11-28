@@ -1094,6 +1094,11 @@ class MainWindow(QMainWindow):
                     banner_image = song_data.get("banner_image", None)
                     self.tracks_panel.add_song_card(song_name, key, bpm, banner_image, song_data)
                     self.on_song_selected(song_data)
+                    # Start background optimization for the new song
+                    try:
+                        self.tracks_panel.start_optimization_for_song(song_data)
+                    except Exception:
+                        pass
                 # Volta para a view principal e remove a página do formulário
                 try:
                     self.stacked_widget.setCurrentWidget(self.main_widget)
@@ -1311,6 +1316,11 @@ class MainWindow(QMainWindow):
                     self.tracks_panel.add_song_card(song_name, key, bpm, banner_image, song)
                 if self.songs:
                     self.on_song_selected(self.songs[0])
+                # Start background optimization for all songs and show progress on cards
+                try:
+                    self.tracks_panel.start_optimization_for_all_songs(self.songs)
+                except Exception:
+                    pass
             except Exception:
                 pass
         except Exception as e:

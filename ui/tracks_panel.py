@@ -1,8 +1,10 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton, 
                              QGroupBox, QCheckBox, QScrollArea, QFrame, QSizePolicy)
-from PyQt5.QtCore import Qt, pyqtSignal, QRect, QTimer, QSize, QPropertyAnimation, QEasingCurve, QObject
+from PyQt5.QtCore import Qt, pyqtSignal, QRect, QTimer, QSize, QPropertyAnimation, QEasingCurve, QObject, QThread, QStandardPaths
 from PyQt5.QtGui import QFont, QPainter, QColor, QPen, QPixmap, QPainterPath
 from ui.timeline import TimelineWidget, TimelineWorker
+import numpy as np
+from scipy.io import wavfile
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -461,6 +463,10 @@ class TracksPanel(QWidget):
         for track_path in self.tracks:
             self.audio_manager.current_player.load_track(track_path) if self.audio_manager.current_player else None
 
+        # Optimization threads map
+        self._opt_threads = {}
+        self._opt_workers = {}
+
     def connect_player_signals(self):
         """Connect to the current player's signals for VU meter updates, safely handling reconnection."""
         try:
@@ -592,6 +598,14 @@ class TracksPanel(QWidget):
         self.master_control = MasterTrackControl()
         # Connect master fader to update all track volumes
         self.master_control.volume_fader.valueChanged.connect(self.on_master_volume_changed)
+        # Connect Ajuste button to toggle master limiter and show active by default
+        try:
+            self.master_control.ajuste_button.clicked.connect(self.toggle_master_limiter)
+            self.master_control.ajuste_button.setProperty("active", "true")
+            self.master_control.ajuste_button.style().unpolish(self.master_control.ajuste_button)
+            self.master_control.ajuste_button.style().polish(self.master_control.ajuste_button)
+        except Exception:
+            pass
         tracks_main_layout.addWidget(self.master_control)
         
         # Add separator line between master fader and tracks
@@ -672,6 +686,79 @@ class TracksPanel(QWidget):
         self.song_card_map.clear()
         self.song_cards_container.setVisible(False)
         self.selected_card = None
+
+    def start_optimization_for_all_songs(self, songs):
+        try:
+            for song in songs or []:
+                self.start_optimization_for_song(song)
+        except Exception as e:
+            print(f"Error starting optimization: {e}")
+
+    def start_optimization_for_song(self, song_data):
+        try:
+            song_id = self._get_song_id(song_data)
+            if not song_id:
+                return
+            # Avoid duplicate workers
+            if song_id in self._opt_threads:
+                return
+            # Find related card and set initial loading state
+            card = self.song_card_map.get(song_id)
+            if card:
+                card.set_loading(True)
+                card.set_loading_progress(0.0)
+            # Create worker thread
+            thread = QThread(self)
+            worker = AudioOptimizeWorker(song_data, song_id)
+            worker.moveToThread(thread)
+            thread.started.connect(worker.run)
+            worker.progressUpdated.connect(self._on_opt_progress)
+            worker.done.connect(self._on_opt_done)
+            worker.error.connect(lambda msg: print(f"Optimization error: {msg}"))
+            thread.finished.connect(lambda: self._cleanup_opt_thread(song_id))
+            self._opt_threads[song_id] = thread
+            self._opt_workers[song_id] = worker
+            thread.start()
+        except Exception as e:
+            print(f"Error starting optimization for song: {e}")
+
+    def _on_opt_progress(self, song_id, progress):
+        try:
+            card = self.song_card_map.get(song_id)
+            if card:
+                card.set_loading_progress(progress)
+        except Exception:
+            pass
+
+    def _on_opt_done(self, song_id):
+        try:
+            card = self.song_card_map.get(song_id)
+            if card:
+                card.set_loading_progress(1.0)
+                card.set_loading(False)
+            # Reload tracks from cache for this song
+            worker = self._opt_workers.get(song_id)
+            if worker:
+                self.audio_manager.reload_song_tracks(worker.song_data)
+                # If this song is selected/current, rebuild timeline
+                try:
+                    if self.audio_manager.is_current_song(worker.song_data):
+                        self.build_timeline_for_current_song()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _cleanup_opt_thread(self, song_id):
+        try:
+            th = self._opt_threads.get(song_id)
+            if th and th.isRunning():
+                th.quit()
+                th.wait(500)
+        except Exception:
+            pass
+        self._opt_threads.pop(song_id, None)
+        self._opt_workers.pop(song_id, None)
 
     def _get_song_id(self, song_data):
         """Generate a unique ID for the song card to avoid duplicates"""
@@ -1000,6 +1087,8 @@ class SongCardWidget(QWidget):
         self.banner_pixmap = None
         self.is_selected = False
         self._blink_on = False
+        self._is_loading = False
+        self._loading_progress = 0.0
         
         # Load banner image if provided
         if self.banner_image_path:
@@ -1084,6 +1173,18 @@ class SongCardWidget(QWidget):
         info_width = info_metrics.horizontalAdvance(info_text)
         painter.drawText(self.width() - info_width - 15, 30, info_text)  # Higher position
 
+        # Draw loading progress bar (blue) at bottom when optimizing
+        if self._is_loading:
+            try:
+                prog = max(0.0, min(1.0, float(self._loading_progress)))
+                bar_w = int(self.width() * prog)
+                bar_h = 6
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor("#3399ff"))
+                painter.drawRect(0, self.height() - bar_h, bar_w, bar_h)
+            except Exception:
+                pass
+
     def set_selected(self, selected: bool):
         self.is_selected = selected
         self.update()
@@ -1105,6 +1206,88 @@ class SongCardWidget(QWidget):
             self.load_banner_image()
             
         self.update()
+
+    def set_loading(self, loading: bool):
+        self._is_loading = bool(loading)
+        self.update()
+
+    def set_loading_progress(self, progress: float):
+        self._loading_progress = float(progress)
+        self.update()
+
+class AudioOptimizeWorker(QObject):
+    progressUpdated = pyqtSignal(str, float)  # song_id, progress 0..1
+    done = pyqtSignal(str)  # song_id
+    error = pyqtSignal(str)
+
+    def __init__(self, song_data, song_id):
+        super().__init__()
+        self.song_data = song_data
+        self.song_id = song_id
+        try:
+            base = QStandardPaths.writableLocation(QStandardPaths.CacheLocation)
+            if not base:
+                base = os.path.expanduser('~/Library/Caches/AppPythonAdrian')
+            if not os.path.isdir(base):
+                os.makedirs(base, exist_ok=True)
+            self.cache_dir = os.path.join(base, 'audio_opt')
+            if not os.path.isdir(self.cache_dir):
+                os.makedirs(self.cache_dir, exist_ok=True)
+        except Exception:
+            self.cache_dir = os.path.expanduser('~/Library/Caches/AppPythonAdrian/audio_opt')
+            try:
+                os.makedirs(self.cache_dir, exist_ok=True)
+            except Exception:
+                pass
+
+    def _cache_key_for(self, file_path):
+        try:
+            abs_path = os.path.abspath(file_path)
+            stat = os.stat(abs_path)
+            payload = f"{abs_path}|{int(stat.st_mtime)}|{int(stat.st_size)}"
+            import hashlib
+            return hashlib.sha1(payload.encode('utf-8')).hexdigest()
+        except Exception:
+            import hashlib
+            return hashlib.sha1((file_path or '').encode('utf-8')).hexdigest()
+
+    def _npz_path(self, file_path):
+        return os.path.join(self.cache_dir, f"{self._cache_key_for(file_path)}.npz")
+
+    def run(self):
+        try:
+            tracks = list(self.song_data.get('tracks', []))
+            total = max(1, len(tracks))
+            for idx, path in enumerate(tracks):
+                try:
+                    # Skip if cache exists
+                    npz_path = self._npz_path(path)
+                    if os.path.exists(npz_path):
+                        self.progressUpdated.emit(self.song_id, float(idx + 1) / float(total))
+                        continue
+                    # Read WAV
+                    sr, samples = wavfile.read(path)
+                    # Ensure float32 stereo
+                    if samples.dtype != np.float32 and samples.dtype != np.float64:
+                        samples = samples.astype(np.float32) / 32768.0
+                    if len(samples.shape) == 1:
+                        samples = np.column_stack((samples, samples))
+                    # Offline normalization only (modest headroom, no compression)
+                    peak = float(np.max(np.abs(samples))) if samples.size > 0 else 0.0
+                    target_peak = 0.90
+                    if peak > target_peak:
+                        samples = samples * (target_peak / peak)
+                    samples = np.clip(samples, -1.0, 1.0)
+                    # Save cache
+                    np.savez(npz_path, samples=samples.astype(np.float32), sample_rate=int(sr))
+                    self.progressUpdated.emit(self.song_id, float(idx + 1) / float(total))
+                except Exception as e:
+                    self.error.emit(str(e))
+                    self.progressUpdated.emit(self.song_id, float(idx + 1) / float(total))
+                    continue
+            self.done.emit(self.song_id)
+        except Exception as e:
+            self.error.emit(str(e))
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

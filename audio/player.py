@@ -5,7 +5,8 @@ import threading
 import os
 import unicodedata
 import re
-from PyQt5.QtCore import QObject, pyqtSignal
+import hashlib
+from PyQt5.QtCore import QObject, pyqtSignal, QStandardPaths
 
 class AudioPlayer(QObject):
     # Signal emitted when volume levels change (for VU meter updates)
@@ -24,6 +25,11 @@ class AudioPlayer(QObject):
         self.lr_enabled = False
         self.output_device = None
         self.input_device = None
+        self._cache_dir = self._ensure_cache_dir()
+        # Limiter controls
+        self.limiter_enabled = True       # Apply protection only on the master bus
+        self.per_track_limiter = False    # Avoid limiting each track to preserve dynamics
+        self.master_threshold = 0.99      # Very high threshold; acts only on extreme peaks
         
     def load_track(self, file_path):
         """Load an audio track from file"""
@@ -36,17 +42,20 @@ class AudioPlayer(QObject):
                 print(f"MP3 support not available. Skipping {file_path}")
                 return False
             elif file_path.lower().endswith('.wav'):
-                sample_rate, samples = wavfile.read(file_path)
-                # Ensure samples are in float format
-                if samples.dtype != np.float32 and samples.dtype != np.float64:
-                    samples = samples.astype(np.float32) / 32768.0
-                    
-                # If mono, convert to stereo
-                if len(samples.shape) == 1:
-                    samples = np.column_stack((samples, samples))
-                
-                # Apply normalization to prevent clipping in source files
-                samples = self._normalize_audio(samples)
+                # Prefer cached optimized version if available
+                cached = self._load_cached_optimized(file_path)
+                if cached is not None:
+                    sample_rate, samples = cached
+                else:
+                    sample_rate, samples = wavfile.read(file_path)
+                    # Ensure samples are in float format
+                    if samples.dtype != np.float32 and samples.dtype != np.float64:
+                        samples = samples.astype(np.float32) / 32768.0
+                    # If mono, convert to stereo
+                    if len(samples.shape) == 1:
+                        samples = np.column_stack((samples, samples))
+                    # Apply normalization to prevent clipping in source files
+                    samples = self._normalize_audio(samples)
             else:
                 raise ValueError("Unsupported file format")
                 
@@ -100,6 +109,25 @@ class AudioPlayer(QObject):
     def set_input_device(self, device):
         try:
             self.input_device = device
+        except Exception:
+            pass
+
+    def set_limiter_enabled(self, enabled: bool):
+        try:
+            self.limiter_enabled = bool(enabled)
+        except Exception:
+            pass
+
+    def set_per_track_limiter(self, enabled: bool):
+        try:
+            self.per_track_limiter = bool(enabled)
+        except Exception:
+            pass
+
+    def set_master_threshold(self, threshold: float):
+        try:
+            # Clamp to sensible range
+            self.master_threshold = max(0.90, min(1.0, float(threshold)))
         except Exception:
             pass
             
@@ -213,7 +241,8 @@ class AudioPlayer(QObject):
                 return
                 
             sample_rate = self.tracks[0]['sample_rate']
-            blocksize = 1024
+            # Increase blocksize to reduce CPU wake-ups and improve stability
+            blocksize = 2048
             
             # Create a callback function for audio playback
             def audio_callback(outdata, frames, time, status):
@@ -249,11 +278,9 @@ class AudioPlayer(QObject):
                                     if track_samples.shape[1] >= 2:
                                         track_samples[:, 0] = 0.0
                             
-                            # Prevent clipping by applying a soft limiter
-                            track_samples = self._apply_soft_limiter(track_samples)
-                            
-                            # Additional protection against extreme peaks
-                            track_samples = self._protect_against_extreme_peaks(track_samples)
+                            # Optional: per-track limiter disabled by default to preserve dynamics
+                            if self.per_track_limiter:
+                                track_samples = self._apply_soft_limiter(track_samples, threshold=self.master_threshold, knee_width=0.08)
                             
                             # Calculate RMS volume level for this track
                             if len(track_samples) > 0:
@@ -277,14 +304,14 @@ class AudioPlayer(QObject):
                     except:
                         pass  # Ignore errors in signal emission
                     
-                    # Apply multiple stages of protection to prevent clipping
-                    mixed_audio = self._apply_soft_limiter(mixed_audio)
-                    mixed_audio = self._protect_against_extreme_peaks(mixed_audio)
+                    # Apply protection only on the master bus (if enabled)
+                    if self.limiter_enabled:
+                        mixed_audio = self._apply_soft_limiter(mixed_audio, threshold=self.master_threshold, knee_width=0.10)
                     
                     # Final normalization to prevent clipping (with safety margin)
                     max_val = np.max(np.abs(mixed_audio))
-                    if max_val > 0.95:  # Safety margin to prevent clipping
-                        mixed_audio = mixed_audio * (0.95 / max_val)
+                    if max_val > 1.0:
+                        mixed_audio = mixed_audio * (1.0 / max_val)
                         
                     outdata[:] = mixed_audio
                     
@@ -304,7 +331,9 @@ class AudioPlayer(QObject):
                 'samplerate': sample_rate,
                 'channels': 2,
                 'callback': audio_callback,
-                'blocksize': blocksize
+                'blocksize': blocksize,
+                'dtype': 'float32',
+                'latency': 'high',
             }
             try:
                 if self.output_device is not None:
@@ -331,6 +360,66 @@ class AudioPlayer(QObject):
                 except:
                     pass
                 self.stream = None
+
+    def _ensure_cache_dir(self):
+        try:
+            base = QStandardPaths.writableLocation(QStandardPaths.CacheLocation)
+            if not base:
+                base = os.path.expanduser('~/Library/Caches/AppPythonAdrian')
+            if not os.path.isdir(base):
+                os.makedirs(base, exist_ok=True)
+            audio_dir = os.path.join(base, 'audio_opt')
+            if not os.path.isdir(audio_dir):
+                os.makedirs(audio_dir, exist_ok=True)
+            return audio_dir
+        except Exception:
+            audio_dir = os.path.expanduser('~/Library/Caches/AppPythonAdrian/audio_opt')
+            try:
+                os.makedirs(audio_dir, exist_ok=True)
+            except Exception:
+                pass
+            return audio_dir
+
+    def _cache_key_for(self, file_path):
+        try:
+            abs_path = os.path.abspath(file_path)
+            stat = os.stat(abs_path)
+            payload = f"{abs_path}|{int(stat.st_mtime)}|{int(stat.st_size)}"
+            h = hashlib.sha1(payload.encode('utf-8')).hexdigest()
+            return h
+        except Exception:
+            return hashlib.sha1(file_path.encode('utf-8')).hexdigest()
+
+    def _cached_npz_path(self, file_path):
+        key = self._cache_key_for(file_path)
+        return os.path.join(self._cache_dir, f"{key}.npz")
+
+    def _load_cached_optimized(self, file_path):
+        try:
+            npz_path = self._cached_npz_path(file_path)
+            if os.path.exists(npz_path):
+                data = np.load(npz_path)
+                samples = data['samples']
+                sample_rate = int(data['sample_rate'])
+                if len(samples.shape) == 1:
+                    samples = np.column_stack((samples, samples))
+                return sample_rate, samples.astype(np.float32)
+        except Exception:
+            pass
+        return None
+
+    def replace_track_samples(self, file_path, sample_rate, samples):
+        """Replace samples for a loaded track if present."""
+        try:
+            for t in self.tracks:
+                if t.get('file_path') == file_path:
+                    t['sample_rate'] = int(sample_rate or t.get('sample_rate', 44100))
+                    if len(samples.shape) == 1:
+                        samples = np.column_stack((samples, samples))
+                    t['samples'] = samples.astype(np.float32)
+                    break
+        except Exception:
+            pass
 
     def _normalize_text(self, s):
         try:
@@ -424,65 +513,34 @@ class AudioPlayer(QObject):
         peak_amplitude = np.max(np.abs(samples))
         
         # If the peak is too high, normalize with a safety margin
-        if peak_amplitude > 0.9:
-            # Normalize to 0.7 to leave headroom for mixing
-            samples = samples * (0.7 / peak_amplitude)
+        if peak_amplitude > 0.95:
+            # Normalize to ~0.9 to leave modest headroom for mixing without sounding too quiet
+            samples = samples * (0.9 / peak_amplitude)
             
         return samples
 
-    def _apply_soft_limiter(self, samples):
-        """Apply a soft limiter to prevent clipping while maintaining audio quality"""
+    def _apply_soft_limiter(self, samples, threshold=0.98, knee_width=0.10):
+        """Apply a soft limiter on a stereo buffer.
+        - threshold: level at which compression begins.
+        - knee_width: knee softness for smoother onset.
+        """
         if len(samples) == 0:
             return samples
             
-        # Pre-normalization to prevent extreme peaks
-        samples = self._normalize_audio(samples)
-        
-        # Soft knee limiter to prevent harsh clipping
-        threshold = 0.8  # Lower threshold for more conservative limiting
-        knee_width = 0.1  # Width of the knee for smooth limiting
-        
-        # Calculate absolute values
+        # Soft knee limiter
         abs_samples = np.abs(samples)
-        
-        # Apply soft limiting only to samples that exceed the threshold
         mask = abs_samples > threshold
         if np.any(mask):
-            # For samples exceeding threshold, apply soft knee compression
             excess = abs_samples[mask] - threshold
-            # Soft knee compression formula with stronger compression
-            compressed_excess = excess / (1 + (excess / knee_width) ** 3)  # Cubic compression
-            # Apply compression to maintain audio quality
+            compressed_excess = excess / (1 + (excess / knee_width) ** 2)
             compression_factor = (threshold + compressed_excess) / abs_samples[mask]
             samples[mask] = samples[mask] * compression_factor
-            
-        # Hard limit to prevent any samples from exceeding 1.0
+        # Gentle hard cap
         samples = np.clip(samples, -1.0, 1.0)
         
         return samples
 
-    def _protect_against_extreme_peaks(self, samples):
-        """Additional protection against extreme peaks that could cause distortion"""
-        if len(samples) == 0:
-            return samples
-            
-        # Apply a gentle high-shelf filter to reduce harshness in extreme highs
-        # This helps with sibilance and harsh transients
-        samples = np.clip(samples, -1.0, 1.0)
-        
-        # Apply a very gentle compression to extreme peaks only
-        extreme_threshold = 0.95
-        abs_samples = np.abs(samples)
-        extreme_mask = abs_samples > extreme_threshold
-        
-        if np.any(extreme_mask):
-            # Gentle compression for extreme peaks
-            reduction_factor = 0.7
-            samples[extreme_mask] = samples[extreme_mask] * reduction_factor + (
-                samples[extreme_mask] * (1 - reduction_factor) * (extreme_threshold / abs_samples[extreme_mask])
-            )
-            
-        return samples
+    # Removed old extreme peaks protection; master soft limiter suffices when enabled
 
     def get_volume_levels(self):
         """Get current volume levels for all tracks"""

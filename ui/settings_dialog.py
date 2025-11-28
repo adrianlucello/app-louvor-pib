@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget, QScrollArea, QComboBox, QListWidget
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget, QScrollArea, QComboBox, QListWidget, QStyledItemDelegate, QStyleOptionViewItem, QCompleter, QStyle
 from PyQt5.QtCore import Qt, QSize, pyqtSignal, QPropertyAnimation, pyqtProperty, QRectF
 from PyQt5.QtGui import QFont, QPainter, QColor, QPen, QLinearGradient, QPainterPath, QRegion
 import sounddevice as sd
@@ -106,6 +106,65 @@ class ToggleSwitch(QWidget):
     def offset(self, value):
         self._offset = float(value)
         self.update()
+
+
+class TwoLineItemDelegate(QStyledItemDelegate):
+    def __init__(self, parent=None, subtitle_role=Qt.UserRole, default_role=Qt.UserRole + 1):
+        super().__init__(parent)
+        self.subtitle_role = subtitle_role
+        self.default_role = default_role
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Background highlight for selection/hover
+        if opt.state & QStyle.State_Selected:
+            painter.fillRect(opt.rect, QColor(64, 64, 64))
+        elif opt.state & QStyle.State_MouseOver:
+            painter.fillRect(opt.rect, QColor(58, 58, 58))
+
+        rect = opt.rect.adjusted(10, 6, -10, -6)
+        title = opt.text
+        subtitle = index.data(self.subtitle_role) or ""
+        is_default = bool(index.data(self.default_role) or False)
+
+        # Title
+        title_font = QFont("SF Pro Display", 13)
+        painter.setFont(title_font)
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(rect.left(), rect.top() + 18, title)
+
+        # Subtitle
+        if subtitle:
+            sub_font = QFont("SF Pro Display", 11)
+            painter.setFont(sub_font)
+            painter.setPen(QColor(179, 179, 179))
+            painter.drawText(rect.left(), rect.top() + 36, subtitle)
+
+        # Default pill
+        if is_default:
+            pill_text = "Padrão"
+            pill_font = QFont("SF Pro Display", 10)
+            painter.setFont(pill_font)
+            metrics = painter.fontMetrics()
+            pill_w = metrics.width(pill_text) + 14
+            pill_h = 18
+            pill_x = rect.right() - pill_w
+            pill_y = rect.top() + 6
+            painter.setBrush(QColor(30, 215, 96))
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 9, 9)
+            painter.setPen(QColor(0, 0, 0))
+            painter.drawText(pill_x + 7, pill_y + 13, pill_text)
+
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        return QSize(option.rect.width(), 48)
 
 
 class SettingRow(QWidget):
@@ -320,27 +379,163 @@ class SettingsDialog(QDialog):
         audio_devices_label.setStyleSheet("color: #B3B3B3; padding-top: 8px;")
         scroll_layout.addWidget(audio_devices_label)
 
-        audio_row_in = QHBoxLayout()
-        in_label = QLabel("Entrada")
-        in_label.setStyleSheet("color: #FFFFFF; font-size: 12px;")
-        self.input_combo = QComboBox()
-        self.input_combo.setStyleSheet("QComboBox { background-color: #2a2a2a; color: #ffffff; border-radius: 10px; padding: 6px; } QAbstractItemView { background-color: #1e1e1e; color: #ffffff; }")
-        audio_row_in.addWidget(in_label)
-        audio_row_in.addWidget(self.input_combo, 1)
-        audio_container_in = QWidget()
-        audio_container_in.setLayout(audio_row_in)
-        scroll_layout.addWidget(audio_container_in)
+        # Input Device Card
+        input_card = QWidget()
+        input_card.setStyleSheet(
+            """
+            QWidget {
+                background-color: #1a1a1a;
+                border-radius: 12px;
+                border: 1px solid #282828;
+            }
+            """
+        )
+        input_card_layout = QVBoxLayout(input_card)
+        input_card_layout.setContentsMargins(16, 12, 16, 12)
+        input_card_layout.setSpacing(8)
 
-        audio_row_out = QHBoxLayout()
-        out_label = QLabel("Saída")
-        out_label.setStyleSheet("color: #FFFFFF; font-size: 12px;")
+        in_label = QLabel("Entrada de Áudio")
+        in_label.setFont(QFont("SF Pro Display", 13, QFont.Medium))
+        in_label.setStyleSheet("color: #FFFFFF; border: none; background: transparent;")
+        input_card_layout.addWidget(in_label)
+
+        self.input_combo = QComboBox()
+        self.input_combo.setMinimumHeight(40)
+        self.input_combo.setStyleSheet(
+            """
+            QComboBox {
+                background-color: #282828;
+                color: #FFFFFF;
+                border: 1px solid #404040;
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+            QComboBox:hover {
+                border: 1px solid #535353;
+                background-color: #2a2a2a;
+            }
+            QComboBox:focus {
+                border: 1px solid #FFFFFF;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #B3B3B3;
+                margin-right: 8px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #282828;
+                color: #FFFFFF;
+                border: 1px solid #404040;
+                border-radius: 8px;
+                padding: 4px;
+                selection-background-color: #404040;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                padding: 8px 12px;
+                border-radius: 4px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #3a3a3a;
+            }
+            """
+        )
+        self.input_combo.setEditable(True)
+        self.input_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.input_combo.lineEdit().setPlaceholderText("Selecione a entrada de áudio…")
+        completer_in = QCompleter(self.input_combo.model(), self.input_combo)
+        completer_in.setFilterMode(Qt.MatchContains)
+        completer_in.setCaseSensitivity(Qt.CaseInsensitive)
+        self.input_combo.setCompleter(completer_in)
+        self.input_combo.setItemDelegate(TwoLineItemDelegate(self.input_combo))
+        input_card_layout.addWidget(self.input_combo)
+        scroll_layout.addWidget(input_card)
+
+        # Output Device Card
+        output_card = QWidget()
+        output_card.setStyleSheet(
+            """
+            QWidget {
+                background-color: #1a1a1a;
+                border-radius: 12px;
+                border: 1px solid #282828;
+            }
+            """
+        )
+        output_card_layout = QVBoxLayout(output_card)
+        output_card_layout.setContentsMargins(16, 12, 16, 12)
+        output_card_layout.setSpacing(8)
+
+        out_label = QLabel("Saída de Áudio")
+        out_label.setFont(QFont("SF Pro Display", 13, QFont.Medium))
+        out_label.setStyleSheet("color: #FFFFFF; border: none; background: transparent;")
+        output_card_layout.addWidget(out_label)
+
         self.output_combo = QComboBox()
-        self.output_combo.setStyleSheet("QComboBox { background-color: #2a2a2a; color: #ffffff; border-radius: 10px; padding: 6px; } QAbstractItemView { background-color: #1e1e1e; color: #ffffff; }")
-        audio_row_out.addWidget(out_label)
-        audio_row_out.addWidget(self.output_combo, 1)
-        audio_container_out = QWidget()
-        audio_container_out.setLayout(audio_row_out)
-        scroll_layout.addWidget(audio_container_out)
+        self.output_combo.setMinimumHeight(40)
+        self.output_combo.setStyleSheet(
+            """
+            QComboBox {
+                background-color: #282828;
+                color: #FFFFFF;
+                border: 1px solid #404040;
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+            QComboBox:hover {
+                border: 1px solid #535353;
+                background-color: #2a2a2a;
+            }
+            QComboBox:focus {
+                border: 1px solid #FFFFFF;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #B3B3B3;
+                margin-right: 8px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #282828;
+                color: #FFFFFF;
+                border: 1px solid #404040;
+                border-radius: 8px;
+                padding: 4px;
+                selection-background-color: #404040;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                padding: 8px 12px;
+                border-radius: 4px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #3a3a3a;
+            }
+            """
+        )
+        self.output_combo.setEditable(True)
+        self.output_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.output_combo.lineEdit().setPlaceholderText("Selecione a saída de áudio…")
+        completer_out = QCompleter(self.output_combo.model(), self.output_combo)
+        completer_out.setFilterMode(Qt.MatchContains)
+        completer_out.setCaseSensitivity(Qt.CaseInsensitive)
+        self.output_combo.setCompleter(completer_out)
+        self.output_combo.setItemDelegate(TwoLineItemDelegate(self.output_combo))
+        output_card_layout.addWidget(self.output_combo)
+        scroll_layout.addWidget(output_card)
 
         divider3 = QWidget()
         divider3.setFixedHeight(1)
@@ -356,7 +551,61 @@ class SettingsDialog(QDialog):
         midi_in_label = QLabel("Entrada MIDI")
         midi_in_label.setStyleSheet("color: #FFFFFF; font-size: 12px;")
         self.midi_input_combo = QComboBox()
-        self.midi_input_combo.setStyleSheet("QComboBox { background-color: #2a2a2a; color: #ffffff; border-radius: 10px; padding: 6px; } QAbstractItemView { background-color: #1e1e1e; color: #ffffff; }")
+        self.midi_input_combo.setMinimumHeight(40)
+        self.midi_input_combo.setStyleSheet(
+            """
+            QComboBox {
+                background-color: #282828;
+                color: #FFFFFF;
+                border: 1px solid #404040;
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+            QComboBox:hover {
+                border: 1px solid #535353;
+                background-color: #2a2a2a;
+            }
+            QComboBox:focus {
+                border: 1px solid #FFFFFF;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #B3B3B3;
+                margin-right: 8px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #282828;
+                color: #FFFFFF;
+                border: 1px solid #404040;
+                border-radius: 8px;
+                padding: 4px;
+                selection-background-color: #404040;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                padding: 8px 12px;
+                border-radius: 4px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #3a3a3a;
+            }
+            """
+        )
+        self.midi_input_combo.setEditable(True)
+        self.midi_input_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.midi_input_combo.lineEdit().setPlaceholderText("Selecione a porta MIDI de entrada…")
+        completer_midi_in = QCompleter(self.midi_input_combo.model(), self.midi_input_combo)
+        completer_midi_in.setFilterMode(Qt.MatchContains)
+        completer_midi_in.setCaseSensitivity(Qt.CaseInsensitive)
+        self.midi_input_combo.setCompleter(completer_midi_in)
+        self.midi_input_combo.setItemDelegate(TwoLineItemDelegate(self.midi_input_combo))
         midi_row_in.addWidget(midi_in_label)
         midi_row_in.addWidget(self.midi_input_combo, 1)
         midi_container_in = QWidget()
@@ -367,7 +616,61 @@ class SettingsDialog(QDialog):
         midi_out_label = QLabel("Saída MIDI")
         midi_out_label.setStyleSheet("color: #FFFFFF; font-size: 12px;")
         self.midi_output_combo = QComboBox()
-        self.midi_output_combo.setStyleSheet("QComboBox { background-color: #2a2a2a; color: #ffffff; border-radius: 10px; padding: 6px; } QAbstractItemView { background-color: #1e1e1e; color: #ffffff; }")
+        self.midi_output_combo.setMinimumHeight(40)
+        self.midi_output_combo.setStyleSheet(
+            """
+            QComboBox {
+                background-color: #282828;
+                color: #FFFFFF;
+                border: 1px solid #404040;
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 13px;
+            }
+            QComboBox:hover {
+                border: 1px solid #535353;
+                background-color: #2a2a2a;
+            }
+            QComboBox:focus {
+                border: 1px solid #FFFFFF;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #B3B3B3;
+                margin-right: 8px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #282828;
+                color: #FFFFFF;
+                border: 1px solid #404040;
+                border-radius: 8px;
+                padding: 4px;
+                selection-background-color: #404040;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                padding: 8px 12px;
+                border-radius: 4px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #3a3a3a;
+            }
+            """
+        )
+        self.midi_output_combo.setEditable(True)
+        self.midi_output_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.midi_output_combo.lineEdit().setPlaceholderText("Selecione a porta MIDI de saída…")
+        completer_midi_out = QCompleter(self.midi_output_combo.model(), self.midi_output_combo)
+        completer_midi_out.setFilterMode(Qt.MatchContains)
+        completer_midi_out.setCaseSensitivity(Qt.CaseInsensitive)
+        self.midi_output_combo.setCompleter(completer_midi_out)
+        self.midi_output_combo.setItemDelegate(TwoLineItemDelegate(self.midi_output_combo))
         midi_row_out.addWidget(midi_out_label)
         midi_row_out.addWidget(self.midi_output_combo, 1)
         midi_container_out = QWidget()
@@ -452,32 +755,55 @@ class SettingsDialog(QDialog):
     def _populate_audio_devices(self):
         try:
             devices = sd.query_devices()
-            input_items = []
-            output_items = []
-            for idx, d in enumerate(devices):
-                name = f"{d['name']}"
-                if d.get('max_input_channels', 0) > 0:
-                    input_items.append((name, idx))
-                if d.get('max_output_channels', 0) > 0:
-                    output_items.append((name, idx))
-            self.input_combo.clear()
-            for name, idx in input_items:
-                self.input_combo.addItem(name, idx)
-            self.output_combo.clear()
-            for name, idx in output_items:
-                self.output_combo.addItem(name, idx)
             try:
                 default_in, default_out = sd.default.device
-                if default_in is not None:
-                    i = next((i for i in range(self.input_combo.count()) if self.input_combo.itemData(i) == default_in), -1)
-                    if i >= 0:
-                        self.input_combo.setCurrentIndex(i)
-                if default_out is not None:
-                    o = next((i for i in range(self.output_combo.count()) if self.output_combo.itemData(i) == default_out), -1)
-                    if o >= 0:
-                        self.output_combo.setCurrentIndex(o)
             except Exception:
-                pass
+                default_in, default_out = (None, None)
+
+            self.input_combo.clear()
+            self.output_combo.clear()
+
+            # Populate input devices with subtitle and default tag
+            for idx, d in enumerate(devices):
+                if d.get('max_input_channels', 0) > 0:
+                    name = f"{d['name']}"
+                    subtitle = f"Canais: {d.get('max_input_channels', 0)} • {int(d.get('default_samplerate', 0))} Hz"
+                    is_def = (default_in == idx)
+                    display = f"{name}" + (" • padrão" if is_def else "")
+                    self.input_combo.addItem(display, idx)
+                    row = self.input_combo.count() - 1
+                    mi = self.input_combo.model().index(row, 0)
+                    self.input_combo.model().setData(mi, subtitle, Qt.UserRole)
+                    self.input_combo.model().setData(mi, is_def, Qt.UserRole + 1)
+                    tip = f"{name}\nEntrada • {subtitle}"
+                    self.input_combo.setItemData(row, tip, Qt.ToolTipRole)
+
+            # Populate output devices
+            for idx, d in enumerate(devices):
+                if d.get('max_output_channels', 0) > 0:
+                    name = f"{d['name']}"
+                    subtitle = f"Canais: {d.get('max_output_channels', 0)} • {int(d.get('default_samplerate', 0))} Hz"
+                    is_def = (default_out == idx)
+                    display = f"{name}" + (" • padrão" if is_def else "")
+                    self.output_combo.addItem(display, idx)
+                    row = self.output_combo.count() - 1
+                    mo = self.output_combo.model().index(row, 0)
+                    self.output_combo.model().setData(mo, subtitle, Qt.UserRole)
+                    self.output_combo.model().setData(mo, is_def, Qt.UserRole + 1)
+                    tip = f"{name}\nSaída • {subtitle}"
+                    self.output_combo.setItemData(row, tip, Qt.ToolTipRole)
+
+            # Select defaults
+            if default_in is not None:
+                i = next((i for i in range(self.input_combo.count()) if self.input_combo.itemData(i) == default_in), -1)
+                if i >= 0:
+                    self.input_combo.setCurrentIndex(i)
+            if default_out is not None:
+                o = next((i for i in range(self.output_combo.count()) if self.output_combo.itemData(i) == default_out), -1)
+                if o >= 0:
+                    self.output_combo.setCurrentIndex(o)
+
+            # Connect signals once
             try:
                 self.input_combo.currentIndexChanged.connect(self._on_input_changed)
             except Exception:
@@ -528,6 +854,11 @@ class SettingsDialog(QDialog):
             self.midi_input_combo.clear()
             for n in names_in:
                 self.midi_input_combo.addItem(n, n)
+                row = self.midi_input_combo.count() - 1
+                mi = self.midi_input_combo.model().index(row, 0)
+                self.midi_input_combo.model().setData(mi, "Porta de entrada MIDI", Qt.UserRole)
+                self.midi_input_combo.model().setData(mi, False, Qt.UserRole + 1)
+                self.midi_input_combo.setItemData(row, f"{n}\nEntrada MIDI", Qt.ToolTipRole)
             try:
                 self.midi_input_combo.currentIndexChanged.connect(self._on_midi_input_changed)
             except Exception:
@@ -536,6 +867,11 @@ class SettingsDialog(QDialog):
             self.midi_output_combo.clear()
             for n in names_out:
                 self.midi_output_combo.addItem(n, n)
+                row = self.midi_output_combo.count() - 1
+                mo = self.midi_output_combo.model().index(row, 0)
+                self.midi_output_combo.model().setData(mo, "Porta de saída MIDI", Qt.UserRole)
+                self.midi_output_combo.model().setData(mo, False, Qt.UserRole + 1)
+                self.midi_output_combo.setItemData(row, f"{n}\nSaída MIDI", Qt.ToolTipRole)
             if names_in:
                 self.midi_list.addItem("Entradas:")
                 for n in names_in:

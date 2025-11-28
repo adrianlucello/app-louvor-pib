@@ -44,6 +44,40 @@ class AudioManager(QObject):
             
         self.current_player = player
 
+    def reload_song_tracks(self, song_data):
+        """Rebuild the player's tracks for a song, preferring cached optimized audio."""
+        try:
+            song_id = self._get_song_id(song_data)
+            was_playing = self._is_playing and self.current_player and (self._get_song_id(self.current_song) == song_id)
+            # Create a fresh player
+            new_player = AudioPlayer()
+            try:
+                new_player.set_lr_mode(self.lr_enabled)
+            except Exception:
+                pass
+            try:
+                if self.output_device is not None:
+                    new_player.set_output_device(self.output_device)
+            except Exception:
+                pass
+            for track_path in song_data.get("tracks", []):
+                new_player.load_track(track_path)
+            # Replace in map
+            self.players[song_id] = new_player
+            # If this is the current song, swap current player
+            if self.current_song and self._get_song_id(self.current_song) == song_id:
+                self.current_player = new_player
+                # Resume playback if it was playing
+                if was_playing:
+                    try:
+                        self.current_player.play_all()
+                        self._is_playing = True
+                        self.playbackStateChanged.emit(True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     def set_lr_mode(self, enabled: bool):
         """Enable/disable LR mode across all players"""
         self.lr_enabled = bool(enabled)
